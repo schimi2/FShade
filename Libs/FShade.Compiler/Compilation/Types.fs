@@ -14,6 +14,8 @@ module Types =
     /// </summary>
     let rec compileType (t : Type) =
         compile {
+            let! t = getImplementationType t
+
             if t.IsEnum then
                 return! compileType typeof<int>
             else

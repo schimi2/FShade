@@ -180,6 +180,17 @@ module StateModification =
     let removeBound v = { runCompile = fun o -> Success({o with bound = Set.remove v o.bound}, ()) }
     let isBound v = { runCompile = fun o -> Success(o, Set.contains v o.bound) }
 
+
+    let attempt c = 
+        { runCompile = fun s ->
+            match c.runCompile s with
+                | Success(s,v) ->
+                    Success(s, Some v)
+                | Error _ ->
+                    Success(s, None)
+        
+        }
+
     
     let lambdas = { runCompile = fun o -> Success(o, o.lambdas |> Map.toSeq |> Seq.map (fun (_,(e,id)) -> (Unique e, id)) |> Map.ofSeq) }
     let resetLambdas() = { runCompile = fun o -> Success({ o with  lambdas = Map.empty; lambdaId = 0 }, ()) }

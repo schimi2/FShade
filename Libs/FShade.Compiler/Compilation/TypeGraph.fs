@@ -19,6 +19,8 @@ module TypeGraph =
 
     let compileTypeDefinition (t : Type) : Compiled<string, 's> =
         compile {
+            let! t = getImplementationType t
+
             let! fieldInfo = if FSharpType.IsTuple t then
                                 let fieldTypes = FSharpType.GetTupleElements t |> Seq.filter(fun pi -> pi <> typeof<unit>) |> Seq.toList
 
@@ -61,7 +63,12 @@ module TypeGraph =
 
                              else
                                 let fields = t.GetFields allFlags |> Seq.toList
-                                let fields = fields |> List.sortBy (fun fi -> System.Runtime.InteropServices.Marshal.OffsetOf(t, fi.Name))
+                                let fields = 
+                                    if t.IsValueType then
+                                        fields |> List.sortBy (fun fi -> System.Runtime.InteropServices.Marshal.OffsetOf(t, fi.Name))
+                                    else
+                                        fields
+
                                 fields |> List.mapC (fun fi -> 
                                     compile {
                                         let! t = compileType fi.FieldType

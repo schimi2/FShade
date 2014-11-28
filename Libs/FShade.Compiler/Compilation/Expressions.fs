@@ -10,6 +10,56 @@ module Expressions =
     open Aardvark.Base
     open FShade.Utils
 
+    let rec getImplementationMethod (mi : MethodBase) =
+        compile {
+            if mi.DeclaringType.FullName.Contains "Microsoft.FSharp.Core.Operators" then
+                match mi with
+                    | :? MethodInfo as mi ->
+                        
+                        let pars = mi.GetParameters()
+                        let parTypes = pars |> Array.map (fun pi -> pi.ParameterType)
+
+                        let impl = 
+                            pars |> Array.tryPick (fun p -> 
+                                let a = p.ParameterType.GetMethod(mi.Name, parTypes)
+                                if a <> null then
+                                    Some a
+                                else
+                                    None
+                            )
+
+       
+                        match impl with
+                            | Some mi -> 
+                                return! getImplementationMethod mi 
+                            | None ->
+                                return mi :> MethodBase
+                    | _ ->
+                        return mi
+            else
+                let! t = getImplementationType mi.DeclaringType
+                
+                let pars = mi.GetParameters() |> Array.toList
+                let! parTypes = pars |> List.mapC (fun p -> getImplementationType p.ParameterType)
+                let parTypes = parTypes |> List.toArray
+
+                let flags = BindingFlags.NonPublic ||| BindingFlags.Public
+
+                let flags = 
+                    if mi.IsStatic then
+                        flags ||| BindingFlags.Static
+                    else
+                        flags ||| BindingFlags.Instance
+
+                let alt = t.GetMethod(mi.Name, flags, Type.DefaultBinder, parTypes, parTypes |> Array.map (fun pi -> ParameterModifier(1))) :> MethodBase
+                if alt <> null then
+                    return alt
+                else
+                    return mi
+
+        }
+
+
     let rec private traverseUsedTypesAndFunctions (e : Expr) =
         compile {
             let! _ = compileType e.Type
@@ -17,13 +67,14 @@ module Expressions =
                 | Pipe(e) -> return! traverseUsedTypesAndFunctions e
 
                 | Call(target,m,args) ->
+                    let! m = getImplementationMethod m
                     let! _ = args |> List.mapC traverseUsedTypesAndFunctions
 
                     do! match target with
                             | Some t -> traverseUsedTypesAndFunctions t
                             | _ -> compile { return () }
 
-                    let! i = compileIntrinsicFunction m
+                    let! i = compileIntrinsicFunction (m |> unbox<_>)
                     do! match i with
                             | Some _ -> compile { return () }
                             | _ -> addMethod m
@@ -39,6 +90,8 @@ module Expressions =
                     let! _ = args |> List.mapC traverseUsedTypesAndFunctions
                     return ()
         }
+
+
 
     /// <summary>
     /// compileValue translates a value having a given type.
@@ -315,41 +368,46 @@ module Expressions =
                     // all other fields are simply resolved using the intrinsic property-definition provided
                     // by the compiler and get a default-name if they're not intrinsic.
                     else
-                        let! i = compileIntrinsicProperty m
-                        let! t = compileExpression false false t
-                        match i with
-                            | Some(str) -> return sprintf "%s.%s" t str |> ret
+                        let! i' = compileIntrinsicProperty m
+                        let! t' = compileExpression false false t
+                        match i' with
+                            | Some(str) -> return sprintf "%s.%s" t' str |> ret
                             | None -> 
                                 match m with
-                                    | :? CustomProperty as m -> return sprintf "%s.%s" t m.Name
+                                    | :? CustomProperty as m -> return sprintf "%s.%s" t' m.Name
                                     | _ ->
                                         match m with
                                             | :? PropertyInfo as p -> 
-                                                let! i = compileIntrinsicFunction p.GetMethod
-                                                match i with
-                                                    | Some fmt -> return System.String.Format(fmt, t) |> ret
-                                                    | None ->  return sprintf "%s.%s" t m.Name |> ret
+                                                let ex = Expr.Call(t, p.GetMethod, [])
+
+                                                let! s = compilerState
+                                                let! ex = attempt (compileExpression lastExpression isStatement ex)
+                                                match ex with
+                                                    | Some ex -> return ex
+                                                    | None -> return sprintf "%s.%s" t' m.Name |> ret
                                             | _ ->
-                                                 return sprintf "%s.%s" t m.Name |> ret
+                                                 return sprintf "%s.%s" t' m.Name |> ret
 
                 // matches FieldSet and PropertySet since we make no distinction between them here.
                 // since the current implementation does not allow union-type fields to be mutable we
                 // don't have to check for these here.
                 | MemberFieldSet(t, m, v) ->
-                    let! i = compileIntrinsicProperty m
-                    let! t = compileExpression false false t
-                    let! v = compileExpression false false v
-                    match i with
-                        | Some(str) -> return sprintf "%s.%s = %s;\r\n" t str v
+                    let! i' = compileIntrinsicProperty m
+                    let! t' = compileExpression false false t
+                    let! v' = compileExpression false false v
+                    match i' with
+                        | Some(str) -> return sprintf "%s.%s = %s;\r\n" t' str v'
                         | None ->  
                             match m with
                                     | :? PropertyInfo as p -> 
-                                        let! i = compileIntrinsicFunction p.SetMethod
-                                        match i with
-                                            | Some fmt -> return System.String.Format(fmt, t, v) |> ret
-                                            | None ->  return sprintf "%s.%s = %s;\r\n" t m.Name v
+
+                                        let ex = Expr.Call(t, p.SetMethod, [v])
+                                        let! ex = attempt (compileExpression lastExpression isStatement ex)
+                                        match ex with
+                                            | Some ex -> return ex
+                                            | None -> return sprintf "%s.%s = %s;\r\n" t' m.Name v'
                                     | _ ->
-                                         return sprintf "%s.%s = %s;\r\n" t m.Name v
+                                         return sprintf "%s.%s = %s;\r\n" t' m.Name v'
 
                 // static properties and fields are simply inlined atm. 
                 // TODO: this might not be sufficient since changes will not be reflected in the shader-code.
@@ -488,7 +546,9 @@ module Expressions =
 
                 // static calls (without a target) are compiled as they are.
                 | Call(None, mi, args) ->
-                    let! i = compileIntrinsicFunction mi
+                    let! mi = getImplementationMethod mi
+
+                    let! i = compileIntrinsicFunction (mi |> unbox<_>)
                     let! args = args |> List.filter(fun a -> a.Type <> typeof<unit>) |> List.mapC (compileExpression false false)
 
                     match i with
@@ -500,7 +560,9 @@ module Expressions =
 
                 // member calls are translated to functions taking the this-parameter at the first position.
                 | Call(Some v, mi, args) -> 
-                    let! i = compileIntrinsicFunction mi
+                    let! mi = getImplementationMethod mi
+
+                    let! i = compileIntrinsicFunction (mi |> unbox<_>)
                     let! args = args |> List.filter(fun a -> a.Type <> typeof<unit>) |> List.mapC (compileExpression false false)
                     let! this = compileExpression false false v
 

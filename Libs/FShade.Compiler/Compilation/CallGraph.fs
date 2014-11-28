@@ -83,6 +83,8 @@ module CallGraph =
             match mi with
                 | :? CustomMethod -> return ""
                 | _ -> 
+                    let! mi = getImplementationMethod mi
+
                     let! name = match name with
                                 | None -> getMethodName mi
                                 | Some n -> compile { return n }

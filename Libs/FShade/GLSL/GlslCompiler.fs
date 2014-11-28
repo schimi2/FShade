@@ -365,6 +365,11 @@ module GLSL =
             member x.CompileApplication (f : obj) (retType : Type) (args : list<Expr>) =
                 compile { return None }
 
+            member x.GetImplementationType (t : Type) =
+                compile {
+                    return t
+                }
+
 
 //
 //    let (|VertexOpt|GeometryOpt|FragmentOpt|NoneOpt|) (t : Option<ShaderType>) =

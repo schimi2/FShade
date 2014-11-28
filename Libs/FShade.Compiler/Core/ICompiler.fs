@@ -35,6 +35,8 @@ type ICompiler<'s> =
     abstract member ProcessFunctionBody : Expr -> Compiled<Expr, 's>
     abstract member InitialState : unit -> 's
 
+    abstract member GetImplementationType : Type -> Compiled<Type, 's>
+
 /// <summary>
 /// The CompilerState represents the internal state of the compilation process and can
 /// be modified using the "compile" computationexpression. There is also support for
@@ -126,3 +128,6 @@ module CompilerFunctions =
 
     let processFunctionBody (body : Expr)  =
         { runCompile = fun s -> (s.compiler.ProcessFunctionBody body).runCompile s }
+
+    let getImplementationType (t : Type)  =
+        { runCompile = fun s -> (s.compiler.GetImplementationType t).runCompile s }

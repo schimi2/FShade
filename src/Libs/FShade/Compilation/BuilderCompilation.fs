@@ -26,6 +26,8 @@ module BuilderCompilation =
                 | BuilderCall(b, mi, [Lambda(v,body)]) when mi.Name = "Delay" ->
                     return! removeBuilderCallsInternal body
 
+                | Microsoft.FSharp.Quotations.Patterns.Quote(a) ->
+                    return! removeBuilderCallsInternal a
 
                 | BuilderCall(b, Method("For",_), [ExprOf(FixedArrayType(d,_)) as seq; Lambda(v,Let(vi,Var(vo),body))]) ->     
                     let! body = removeBuilderCallsInternal body

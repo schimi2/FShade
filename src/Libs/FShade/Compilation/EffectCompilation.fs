@@ -50,6 +50,62 @@ module EffectCompilation =
                 | _ -> return! error "not a function"
         }
 
+    let lambdaToShader (l : Expr) = 
+        transform {
+            match l with
+                | Lambda(v,b) ->
+                    let outputType = b.Type
+                    let prim = v.Type.GetInterface("Primitive`1")
+                    let itop = 
+                        if prim = null then 
+                            None 
+                        else 
+                            v.Type.GetProperty("InputTopology").GetValue(null) |> unbox<InputTopology> |> Some
+
+                    let! s = toShader itop l
+
+                    if s.shaderType = ShaderType.TessControl then
+
+                        let _,inner = s.outputs.["TessLevelInner"]
+                        let _,outer = s.outputs.["TessLevelOuter"]
+
+                        let rec padTessLevels (e : Expr) =
+                            match e with
+                                | VarSet(v, NewArray(t,values)) when v = inner || v = outer ->
+                                    let count = if v = inner then 2 else 4
+                            
+                                    let argCount = values.Length
+                                    if argCount < count then
+                                        let values = List.concat [values; List.init (count - argCount) (fun _ -> Expr.Value(1.0))]
+                                        Expr.VarSet(v, Expr.NewArray(t, values))
+                                    elif argCount > count then
+                                        let values = values |> Seq.take count |> Seq.toList
+                                        Expr.VarSet(v, Expr.NewArray(t, values))
+                                    else
+                                        e
+
+                                | ShapeLambda(v, b) -> Expr.Lambda(v, padTessLevels b)
+                                | ShapeCombination(o, args) -> RebuildShapeCombination(o, args |> List.map padTessLevels)
+                                | _ -> e
+
+                        let id = Var("InvocationId", typeof<int>)
+                        let mi = getMethodInfo <@ (=) : int -> int -> bool @>
+                        let mi = mi.MakeGenericMethod [| typeof<int> |]
+
+                        let newBody = Expr.IfThenElse(Expr.Call(mi, [Expr.Var id; Expr.Value(0)]),
+                                        padTessLevels s.body,
+                                        Expr.Value(())
+                                       )
+
+                        return [{ s with body = newBody; 
+                                         inputs = Map.add "InvocationId" id s.inputs
+                                         debugInfo = None }]
+                    else
+                        return [{ s with debugInfo = None }]
+
+                | _ -> return! error "not a function"
+        }
+
     let createPassingShader (prim : Type) (id : Var)=
         compile {
             let vertexType = prim.GetGenericArguments().[0]
@@ -91,55 +147,57 @@ module EffectCompilation =
         let debugInfo = ShaderDebug.tryGetShaderInfo f e
         let e = Expr.Lambda(Var("input", typeof<'a>), e)
 
-        let prim = typeof<'a>.GetInterface("Primitive`1")
-        let itop = 
-            if prim = null then 
-                None 
-            else 
-                typeof<'a>.GetProperty("InputTopology").GetValue(null) |> unbox<InputTopology> |> Some
-
-        compile {
-            let! s = toShader itop e
-
-            if s.shaderType = ShaderType.TessControl then
-
-                let _,inner = s.outputs.["TessLevelInner"]
-                let _,outer = s.outputs.["TessLevelOuter"]
-
-                let rec padTessLevels (e : Expr) =
-                    match e with
-                        | VarSet(v, NewArray(t,values)) when v = inner || v = outer ->
-                            let count = if v = inner then 2 else 4
-                            
-                            let argCount = values.Length
-                            if argCount < count then
-                                let values = List.concat [values; List.init (count - argCount) (fun _ -> Expr.Value(1.0))]
-                                Expr.VarSet(v, Expr.NewArray(t, values))
-                            elif argCount > count then
-                                let values = values |> Seq.take count |> Seq.toList
-                                Expr.VarSet(v, Expr.NewArray(t, values))
-                            else
-                                e
-
-                        | ShapeLambda(v, b) -> Expr.Lambda(v, padTessLevels b)
-                        | ShapeCombination(o, args) -> RebuildShapeCombination(o, args |> List.map padTessLevels)
-                        | _ -> e
-
-                let id = Var("InvocationId", typeof<int>)
-                let mi = getMethodInfo <@ (=) : int -> int -> bool @>
-                let mi = mi.MakeGenericMethod [| typeof<int> |]
-
-                let newBody = Expr.IfThenElse(Expr.Call(mi, [Expr.Var id; Expr.Value(0)]),
-                                padTessLevels s.body,
-                                Expr.Value(())
-                               )
-
-                return [{ s with body = newBody; 
-                                 inputs = Map.add "InvocationId" id s.inputs
-                                 debugInfo = debugInfo }]
-            else
-                return [{ s with debugInfo = debugInfo }]
-        }
+        lambdaToShader e
+//
+//        let prim = typeof<'a>.GetInterface("Primitive`1")
+//        let itop = 
+//            if prim = null then 
+//                None 
+//            else 
+//                typeof<'a>.GetProperty("InputTopology").GetValue(null) |> unbox<InputTopology> |> Some
+//
+//        compile {
+//            let! s = toShader itop e
+//
+//            if s.shaderType = ShaderType.TessControl then
+//
+//                let _,inner = s.outputs.["TessLevelInner"]
+//                let _,outer = s.outputs.["TessLevelOuter"]
+//
+//                let rec padTessLevels (e : Expr) =
+//                    match e with
+//                        | VarSet(v, NewArray(t,values)) when v = inner || v = outer ->
+//                            let count = if v = inner then 2 else 4
+//                            
+//                            let argCount = values.Length
+//                            if argCount < count then
+//                                let values = List.concat [values; List.init (count - argCount) (fun _ -> Expr.Value(1.0))]
+//                                Expr.VarSet(v, Expr.NewArray(t, values))
+//                            elif argCount > count then
+//                                let values = values |> Seq.take count |> Seq.toList
+//                                Expr.VarSet(v, Expr.NewArray(t, values))
+//                            else
+//                                e
+//
+//                        | ShapeLambda(v, b) -> Expr.Lambda(v, padTessLevels b)
+//                        | ShapeCombination(o, args) -> RebuildShapeCombination(o, args |> List.map padTessLevels)
+//                        | _ -> e
+//
+//                let id = Var("InvocationId", typeof<int>)
+//                let mi = getMethodInfo <@ (=) : int -> int -> bool @>
+//                let mi = mi.MakeGenericMethod [| typeof<int> |]
+//
+//                let newBody = Expr.IfThenElse(Expr.Call(mi, [Expr.Var id; Expr.Value(0)]),
+//                                padTessLevels s.body,
+//                                Expr.Value(())
+//                               )
+//
+//                return [{ s with body = newBody; 
+//                                 inputs = Map.add "InvocationId" id s.inputs
+//                                 debugInfo = debugInfo }]
+//            else
+//                return [{ s with debugInfo = debugInfo }]
+//        }
 
     let toEffectInternalCache = MemoCache(false)
     let toEffectInternal (s : Shader) =

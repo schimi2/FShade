@@ -75,7 +75,7 @@ module FShadeService =
             Assembly.LoadFile (local "Aardvark.Base.FSharp") |> ignore
             Assembly.LoadFile (local "FShade.Compiler") |> ignore
             Assembly.LoadFile (local "FShade") |> ignore
-            let ass = Assembly.ReflectionOnlyLoad(ass)
+            let ass = Assembly.Load(ass)
             let t = ass.GetType(typeName)
 
             let methods = composition |> List.map t.GetMethod
@@ -117,6 +117,41 @@ module FShadeService =
         let newNamespace() =
             let g = Guid.NewGuid()
             g.ToByteArray() |> Array.map (sprintf "%02X") |> String.concat "" |> sprintf "Generated_%s"
+
+
+        let compile (ass : Assembly) (typeName : string) (composition : list<string>) =
+            let t = ass.GetType(typeName)
+
+            let methods = composition |> List.map t.GetMethod
+
+            if methods |> List.forall (fun m -> m <> null) then
+                let definitions = methods |> List.map Microsoft.FSharp.Quotations.Expr.TryGetReflectedDefinition
+
+                if definitions |> List.forall Option.isSome then
+                    let definitions = definitions |> List.map Option.get
+
+                    let shaders = definitions |> List.map lambdaToShader
+
+                    let effects = definitions |> List.map (fun e ->
+                        compile {
+                            let! s = lambdaToShader e
+                            match s with
+                                | [s] ->
+                                    let effect = toEffectInternal s
+                                    return effect
+                                | _ ->
+                                    return! error "functions can only yield one shader"
+                        }
+                    )
+
+                    let composed = compose effects
+
+                    GLES.compileEffect composed
+                else
+                    Error "could not find definitions for some of the specified functions"
+
+            else
+                Error "could not find some of the specified functions"
 
         member x.CompileEffect (moduleName : string) (code : string) (composition : list<string>) =
             let ns = newNamespace()
@@ -167,7 +202,7 @@ module FShadeService =
 //                |]
 //
 //            let errors, exitCode, assembly =
-//                scs.CompileToDynamicAssembly(args,None)
+//                scs.CompileToDynamicAssembly(args, execute = None)
 
             Log.stop()
 
@@ -178,6 +213,9 @@ module FShadeService =
                        |> List.map (fun err -> { err with startLine = err.startLine - lineOffset; endLine = err.endLine - lineOffset})
 
             if exitCode = 0 then
+
+                //let res = compile assembly.Value (ns + "." + moduleName) composition
+
 
                 let d = AppDomain.CreateDomain(ns)
                 let data = File.ReadAllBytes(assPath)
@@ -209,7 +247,7 @@ module FShadeService =
         let errStream = new StringWriter(sbErr)
 
         // Build command line arguments & start FSI session
-        let argv = [| @"C:\Program Files (x86)\Microsoft SDKs\F#\3.1\Framework\v4.0\fsi.exe" |]
+        let argv = [| @"C:\Program Files (x86)\Microsoft SDKs\F#\3.1\Framework\v4.0\fsiAnyCpu.exe" |]
         let allArgs = Array.append argv [|"--noninteractive"|]
 
         let fsiConfig = FsiEvaluationSession.GetDefaultConfiguration()
@@ -287,6 +325,78 @@ module FShadeService =
                 | _ ->
                     failwith "sadsad"
 
+    
+    open System.Net
+    open System.Net.Sockets
+
+
+    type CompileRequest = { code : string; composition : list<string> }
+
+    type HttpService(port : int) =
+        let pickler = Nessos.FsPickler.Json.FsPickler.CreateJson(true, true)
+        let fsc = Service()
+
+        let l = new HttpListener()
+        do l.Prefixes.Add(sprintf "http://localhost:%d/" port)
+           l.Start()
+
+        let empty = System.Text.ASCIIEncoding.UTF8.GetBytes "<html><head><title>not found</title></head><body><h1>not found</h1></body></html>"
+
+        let run() =
+            async {
+                while true do
+                    let! ctx = l.GetContextAsync() |> Async.AwaitTask
+
+                    let path = ctx.Request.Url.LocalPath
+
+                    ctx.Response.Headers.Add("Access-Control-Allow-Credentials", "true")
+                    ctx.Response.Headers.Add("Access-Control-Allow-Origin", "*")
+                    ctx.Response.Headers.Add("Access-Control-Origin", "*")
+
+                    if ctx.Request.HttpMethod = "POST" then
+                        let reader = new System.IO.StreamReader(ctx.Request.InputStream, System.Text.ASCIIEncoding.ASCII)
+                        let data = reader.ReadToEnd()
+
+                        printfn "%s" data
+
+                        try 
+                            let request : CompileRequest = pickler.UnPickleOfString data
+                            printfn "%A" request
+
+                            let code = request.code.Replace("\t", "    ")
+
+                            match fsc.CompileEffect "A" code request.composition with
+                                | Left(_,code) ->
+                                    ctx.Response.StatusCode <- 200
+                                    ctx.Response.ContentType <- "text/html"
+                                    let arr = System.Text.ASCIIEncoding.UTF8.GetBytes(code)
+                                    ctx.Response.OutputStream.Write(arr, 0, arr.Length)
+                                    ctx.Response.OutputStream.Close()
+                                | Right e ->
+                                    ctx.Response.StatusCode <- 500
+                                    ctx.Response.ContentType <- "text/html"
+                                    let arr = System.Text.ASCIIEncoding.UTF8.GetBytes(sprintf "%A" e)
+                                    ctx.Response.OutputStream.Write(arr, 0, arr.Length)
+                                    ctx.Response.OutputStream.Close()
+                        with _ ->
+                            ctx.Response.StatusCode <- 500
+                            ctx.Response.ContentType <- "text/html"
+                            ctx.Response.OutputStream.Write(empty, 0, empty.Length)
+                            ctx.Response.OutputStream.Close()
+                    else
+                        ctx.Response.StatusCode <- 404
+                        ctx.Response.ContentType <- "text/html"
+                        ctx.Response.OutputStream.Write(empty, 0, empty.Length)
+                        ctx.Response.OutputStream.Close()
+
+
+            }
+
+        member x.Start() =
+            run() |> Async.StartAsTask |> ignore
+
+        member x.Run() =
+            run() |> Async.RunSynchronously 
 
 
 let code =
@@ -313,6 +423,9 @@ open Aardvark.Base
 [<EntryPoint>]
 let main argv =
     
+    let s = FShadeService.HttpService(1337)
+    s.Run()
+
     let fsc = FShadeService.Service()
     let fsi = FShadeService.FsiSession()
 
@@ -336,8 +449,9 @@ let main argv =
         System.GC.WaitForFullGCApproach() |> ignore
         System.GC.WaitForFullGCComplete() |> ignore
         sw.Start()
-        fsi.GetToolTip code 9 62 |> ignore
+        //fsi.GetToolTip code 9 62 |> ignore
         //fsi.Check code |> ignore
+        fsc.CompileEffect "A" code ["a"; "b"] |> ignore
         sw.Stop()
 
         Log.line "%.1f%%: %Ams" (100.0 * float i / float iter) (sw.Elapsed.TotalMilliseconds / float i)

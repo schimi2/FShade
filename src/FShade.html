@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="en" style="height: 100%;">
+    <head>
+        <title>FShade</title>
+        
+        <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.2/css/bootstrap.min.css">
+        <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.2/css/bootstrap-theme.min.css">
+        <script src="http://code.jquery.com/jquery-2.1.3.min.js"></script>
+        <script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.2/js/bootstrap.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.1.3/ace.js" type="text/javascript" charset="utf-8"></script>
+		
+		<script type="text/javascript">
+		
+ace.define('ace/mode/fsharp_highlight_rules', function (require, exports, module)
+{
+    "use strict";
+
+    var oop = require("../lib/oop");
+    var TextHighlightRules = require("./text_highlight_rules").TextHighlightRules;
+
+    var FSharpHighlightRules = function ()
+    {
+        var keywords =
+            // actual keywords
+            'abstract|and|as|assert|base|begin|class|default|delegate|do|done|downcast|downto|elif|else|end|exception|extern|false' +
+            '|finally|for|fun|function|global|if|in|inherit|inline|interface|internal|lazy|let|let!|match|member|module|mutable|namespace' +
+            '|new|not|null|of|open|or|override|private|public|rec|return|return!|select|static|struct|then|to|true|try|type|typeof|upcast|use' +
+            '|use!|val|void|when|while|with|yield|yield!|__SOURCE_DIRECTORY__' +
+
+            // OCaml keywords
+            '|asr|land|lor|lsl|lsr|lxor|mod|sig' +
+
+            // future keywords
+            '|atomic|break|checked|component|const|constraint|constructor|continue|eager|event|external|fixed|functor|include|' +
+            '|method|mixin|object|parallel|process|protected|pure|sealed|tailcall|trait|virtual|volatile';
+
+        var builtinConstants = ("true|false");
+
+        var builtinFunctions = (
+            ''
+        );
+
+        var keywordMapper = this.createKeywordMapper({
+            "variable.language": "this",
+            "keyword": keywords,
+            "constant.language": builtinConstants,
+            "support.function": builtinFunctions
+        }, "identifier");
+
+        var decimalInteger = "(?:(?:[1-9]\\d*)|(?:0))";
+        var octInteger = "(?:0[oO]?[0-7]+)";
+        var hexInteger = "(?:0[xX][\\dA-Fa-f]+)";
+        var binInteger = "(?:0[bB][01]+)";
+        var integer = "(?:" + decimalInteger + "|" + octInteger + "|" + hexInteger + "|" + binInteger + ")";
+
+        var exponent = "(?:[eE][+-]?\\d+)";
+        var fraction = "(?:\\.\\d+)";
+        var intPart = "(?:\\d+)";
+        var pointFloat = "(?:(?:" + intPart + "?" + fraction + ")|(?:" + intPart + "\\.))";
+        var exponentFloat = "(?:(?:" + pointFloat + "|" + intPart + ")" + exponent + ")";
+        var floatNumber = "(?:" + exponentFloat + "|" + pointFloat + ")";
+
+        this.$rules = {
+            "start": [
+                {
+                    token: "comment",
+                    regex: '\\(\\*.*?\\*\\)\\s*?$'
+                },
+                {
+                    token: "comment",
+                    regex: '\\(\\*.*',
+                    next: "comment"
+                },
+                {
+                    token: "string", // single line
+                    regex: '["](?:(?:\\\\.)|(?:[^"\\\\]))*?["]'
+                },
+                {
+                    token: "string", // single char
+                    regex: "'.'"
+                },
+                {
+                    token: "string", // " string
+                    regex: '"',
+                    next: "qstring"
+                },
+                {
+                    token: "constant.numeric", // imaginary
+                    regex: "(?:" + floatNumber + "|\\d+)[jJ]\\b"
+                },
+                {
+                    token: "constant.numeric", // float
+                    regex: floatNumber
+                },
+                {
+                    token: "constant.numeric", // integer
+                    regex: integer + "\\b"
+                },
+                {
+                    token: keywordMapper,
+                    regex: "[a-zA-Z_$][a-zA-Z0-9_$]*\\b"
+                },
+                {
+                    token: "keyword.operator",
+                    regex: "\\+\\.|\\-\\.|\\*\\.|\\/\\.|#|;;|\\+|\\-|\\*|\\*\\*\\/|\\/\\/|%|<<|>>|&|\\||\\^|~|<|>|<=|=>|==|!=|<>|<-|="
+                },
+                {
+                    token: "paren.lparen",
+                    regex: "[[({]"
+                },
+                {
+                    token: "paren.rparen",
+                    regex: "[\\])}]"
+                },
+                {
+                    token: "text",
+                    regex: "\\s+"
+                }
+            ],
+            "comment": [
+                {
+                    token: "comment", // closing comment
+                    regex: ".*?\\*\\)",
+                    next: "start"
+                },
+                {
+                    token: "comment", // comment spanning whole line
+                    regex: ".+"
+                }
+            ],
+
+            "qstring": [
+                {
+                    token: "string",
+                    regex: '"',
+                    next: "start"
+                }, {
+                    token: "string",
+                    regex: '.+'
+                }
+            ]
+        };
+    };
+
+    oop.inherits(FSharpHighlightRules, TextHighlightRules);
+
+    exports.FSharpHighlightRules = FSharpHighlightRules;
+});
+
+ace.define('ace/mode/fsharp', function (require, exports, module)
+{
+    "use strict";
+
+    var oop = require("../lib/oop");
+    var TextMode = require("./text").Mode;
+    var Tokenizer = require("../tokenizer").Tokenizer;
+    var FSharpHighlightRules = require("./fsharp_highlight_rules").FSharpHighlightRules;
+    var Range = require("../range").Range;
+
+    var Mode = function ()
+    {
+        this.HighlightRules = FSharpHighlightRules;
+    };
+    oop.inherits(Mode, TextMode);
+
+    var indenter = /(?:[({[=:]|[-=]>|\b(?:else|try|with))\s*$/;
+
+    (function ()
+    {
+
+        this.toggleCommentLines = function (state, doc, startRow, endRow)
+        {
+            var i, line;
+            var outdent = true;
+            var re = /^\s*\(\*(.*)\*\)/;
+
+            for (i = startRow; i <= endRow; i++)
+            {
+                if (!re.test(doc.getLine(i)))
+                {
+                    outdent = false;
+                    break;
+                }
+            }
+
+            var range = new Range(0, 0, 0, 0);
+            for (i = startRow; i <= endRow; i++)
+            {
+                line = doc.getLine(i);
+                range.start.row = i;
+                range.end.row = i;
+                range.end.column = line.length;
+
+                doc.replace(range, outdent ? line.match(re)[1] : "(*" + line + "*)");
+            }
+        };
+
+        this.getNextLineIndent = function (state, line, tab)
+        {
+            var indent = this.$getIndent(line);
+            var tokens = this.getTokenizer().getLineTokens(line, state).tokens;
+
+            if (!(tokens.length && tokens[tokens.length - 1].type === 'comment') &&
+                state === 'start' && indenter.test(line))
+                indent += tab;
+            return indent;
+        };
+
+        this.$id = "ace/mode/fsharp";
+    }).call(Mode.prototype);
+
+    exports.Mode = Mode;
+});
+		</script>
+		</script>
+		
+        <script type="text/javascript">
+			var editor = null;
+			var glsl = null;
+			
+			$(document).ready(function() {
+				editor = ace.edit("fsharp");
+				editor.setTheme("ace/theme/monokai");
+				editor.getSession().setMode("ace/mode/fsharp");
+				
+				glsl = ace.edit("glsl");
+				glsl.setTheme("ace/theme/monokai");
+				glsl.getSession().setMode("ace/mode/glsl");
+			});
+			
+            (function ($, undefined) {
+                $.fn.getCursorPosition = function() {
+                    var el = $(this).get(0);
+                    var pos = 0;
+                    if('selectionStart' in el) {
+                        pos = el.selectionStart;
+                    } else if('selection' in document) {
+                        el.focus();
+                        var Sel = document.selection.createRange();
+                        var SelLength = document.selection.createRange().text.length;
+                        Sel.moveStart('character', -el.value.length);
+                        pos = Sel.text.length - SelLength;
+                    }
+                    return pos;
+                }
+            })(jQuery);
+			
+			Array.prototype.clean = function(deleteValue) {
+			  for (var i = 0; i < this.length; i++) {
+				if (this[i] == deleteValue) {         
+				  this.splice(i, 1);
+				  i--;
+				}
+			  }
+			  return this;
+			};
+        
+            function compile() {
+                var text = unescape(editor.getSession().getValue());
+				var composition = $("#composition").val().split(" ").clean("");
+				
+				console.log(text)
+                $.post("http://localhost:1337/", JSON.stringify({ code: text, composition: composition }),  
+                    function(result) {
+						glsl.getSession().setValue(result);
+                        //alert(result);
+                    })
+                 .fail(
+                    function() { 
+                        alert("ERROR"); 
+                    });
+            }
+            
+            
+            function getTooltip() {
+                var pos = $("#fsharp").getCursorPosition();
+                alert("POS: " + pos);
+            }
+        
+        </script>
+           
+        <style>
+			#fsharp { 
+				position: absolute;
+				top: 8px;
+				right: 0;
+				bottom: 8px;
+				left: 0;
+			}
+			
+			#glsl { 
+				position: absolute;
+				top: 8px;
+				right: 0;
+				bottom: 8px;
+				left: 0;
+			}
+			
+            textarea
+            {
+                width:100%;
+                height: 100%;
+            }
+        </style>
+           
+    </head>
+    <body style="height: 100%;">
+        <div class="container" style="height: 80%;">
+        
+            <div class="row" style="width: 100%; height: 100%;">
+                <div class="col-md-9 col-sm-9" style="width: 50%; height: 100%;">
+                    <div id="fsharp">module A =
+    open Aardvark.Base
+    open FShade.Compiler
+    open FShade
+    type Vertex = 
+        { [&lt;Semantic("Positions")&gt;] pos : V4d 
+          [&lt;Semantic("TexCoord")&gt;] tc : V2d
+          [&lt;Semantic("Colors")&gt;] color : V4d
+        }
+
+    let a (x : Vertex) =
+        vertex {
+            return { x with pos = (uniform?ModelTrafo : M44d) * x.pos }
+        }
+
+    let b (x : Vertex) =
+        fragment {
+            return x.color
+        }
+        
+    let c (x : Vertex) =
+        fragment {
+            return x.color * V4d(x.tc.Y, x.tc.Y, 1.0, 1.0)
+        }
+			
+					
+					</div>
+				</div>
+
+                <div class="col-md-9 col-sm-9" style="width: 50%; height: 100%;">
+                    <div id="glsl"></div>
+                </div>
+            </div>
+            <div class="row">
+				<input type="text" id="composition" value="a b c" />
+                <div class="col-md-1 col-sm-1">
+                    <input type="button" value="Compile" onclick="compile()" class="btn btn-xlg btn-primary"/>
+                </div>
+                <div class="col-md-1 col-sm-1">
+                    <input type="button" value="Tooltip" onclick="getTooltip()" class="btn btn-xlg btn-primary"/>
+                </div>
+            </div>
+        </div>
+    </body>
+</html>

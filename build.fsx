@@ -7,10 +7,17 @@ open System.IO
 
 let core = ["src/Libs/FShade.Compiler/FShade.Compiler.fsproj"; "src/Libs/FShade/FShade.fsproj"; "src/Libs/FShade.Debug/FShade.Debug.fsproj"];
 let demo = ["src/Apps/FShade.DemoRenderer/FShade.DemoRenderer.fsproj"; "src/Apps/FShade.Demo/FShade.Demo.fsproj"];
-let apps = ["src/Apps/FSCC/FSCC.fsproj"; "src/Apps/FSCC.Service/FSCC.Service.fsproj"]
+let apps = ["src/Apps/FSCC/FSCC.fsproj"; "src/Apps/FSCC.Service/FSCC.Service.fsproj"; "src/Apps/Service/Service.fsproj"]
 
 Target "Restore" (fun () ->
-    RestorePackages()
+
+    let packageConfigs = !!"src/**/packages.config" |> Seq.toList
+
+    let defaultNuGetSources = RestorePackageHelper.RestorePackageDefaults.Sources
+    for pc in packageConfigs do
+        RestorePackage (fun p -> { p with OutputPath = "Packages" }) pc
+
+
 )
 
 Target "Clean" (fun () ->

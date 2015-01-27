@@ -217,7 +217,61 @@ ace.define('ace/mode/fsharp', function (require, exports, module)
         <script type="text/javascript">
 			var editor = null;
 			var glsl = null;
-			
+			var timer;
+            var checkTimer;
+            var last = { row: -1, column: -1 };
+            var mousePosition = { top: 0, left: 0 };
+            
+            
+            function gotErrors(errors) {
+                var str = ""
+                for(var i = 0; i < errors.length; i++) {
+                    var e = errors[i];
+                    console.log(e);
+                    
+                    var icon = "glyphicon-remove-sign";
+                    var color = "#DD0000";
+                    if(e.severity.value == 0) {
+                        icon = "glyphicon-warning-sign";
+                        color = "#999900";
+                    }
+                    
+                    var iconCode = "<span class=\"glyphicon " + icon + "\" aria-hidden=\"true\" style=\"color: " + color + "; font-size: 1.2em;\"></span>";
+       
+                    str += "<tr><td>" + iconCode + "</td><td>" + e.message + "</td><td>" + e.startLine + "</td><td>" + e.startCol + "</td></tr>\n";
+                }
+                
+                $('#errors').find('tbody').html(str);
+            }
+            
+            function mouseStopped() {
+                var text = unescape(editor.getSession().getValue());
+                $.post("http://localhost:1337/tooltip/", JSON.stringify({ code: text, row: 1 + last.row, column: 1 + last.column }), function(res) {
+                    var list = $.parseJSON(res);
+                    
+                    var text = ""
+                    var count = list.length < 5 ? list.length : 5;
+                    
+                    for(var i = 0; i < count; i++) {
+                        var line = list[i];
+                        if(line.length >= 70)
+                            line = line.substr(0, 67) + "...";
+                        text += line + "<br>"
+                    }
+                    
+                    if(list.length >= 5)
+                        text += "..."
+                    
+                    $("#overlayText").html(text);
+                    $("#overlay")
+                        .css({ top : mousePosition.top + 10, left: mousePosition.left + 15 })
+                        .fadeIn(20);
+                    
+                    
+                });
+                //console.log("pos: " + last.row + ", " + last.column);
+            }
+            
 			$(document).ready(function() {
 				editor = ace.edit("fsharp");
 				editor.setTheme("ace/theme/monokai");
@@ -226,6 +280,27 @@ ace.define('ace/mode/fsharp', function (require, exports, module)
 				glsl = ace.edit("glsl");
 				glsl.setTheme("ace/theme/monokai");
 				glsl.getSession().setMode("ace/mode/glsl");
+                
+                //setInterval(check, 1000);
+                
+                editor.on("change", function(e) {
+                    clearTimeout(checkTimer);
+                    checkTimer=setTimeout(check,1000);
+                });
+                editor.on("mousemove", function (e)
+                {
+                    
+                    mousePosition = { top: e.clientY, left: e.clientX };
+                    var position = e.getDocumentPosition();
+                    if(position.row != last.row || position.column != last.column) {
+                        $("#overlay").fadeOut(10);
+                        last = position;
+                    }
+                    clearTimeout(timer);
+                    timer=setTimeout(mouseStopped,400);
+                    
+                });
+                
 			});
 			
             (function ($, undefined) {
@@ -255,6 +330,14 @@ ace.define('ace/mode/fsharp', function (require, exports, module)
 			  return this;
 			};
         
+            function check() {
+                var text = unescape(editor.getSession().getValue());
+                $.post("http://localhost:1337/check/", text,  function(result) {
+                    var errors = $.parseJSON(result);
+                    gotErrors(errors);
+                });
+            }
+        
             function compile() {
                 var text = unescape(editor.getSession().getValue());
 				var composition = $("#composition").val().split(" ").clean("");
@@ -262,20 +345,25 @@ ace.define('ace/mode/fsharp', function (require, exports, module)
 				console.log(text)
                 $.post("http://localhost:1337/", JSON.stringify({ code: text, composition: composition }),  
                     function(result) {
-						glsl.getSession().setValue(result);
-                        //alert(result);
+                        var response = $.parseJSON(result);
+                        
+                        var code = response.glsl;
+                        if(code == null)
+                            code = ""
+                        
+						glsl.getSession().setValue(code);
+                
+                        
+                        gotErrors(response.errors);
+                        //alert(response.errors);
                     })
                  .fail(
                     function() { 
-                        alert("ERROR"); 
+                        alert("Server did not respond"); 
                     });
             }
             
             
-            function getTooltip() {
-                var pos = $("#fsharp").getCursorPosition();
-                alert("POS: " + pos);
-            }
         
         </script>
            
@@ -343,6 +431,22 @@ ace.define('ace/mode/fsharp', function (require, exports, module)
                 </div>
             </div>
             <div class="row">
+                <div class="col-md-12 col-sm-12">
+                    <table class="table" id="errors" style="background: #333333; color: #EEEEEE">
+                        <thead>
+                            <tr>
+                                <th>&nbsp;</th>
+                                <th>Description</th>
+                                <th>Line</th>
+                                <th>Column</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="row">
 				<input type="text" id="composition" value="a b c" />
                 <div class="col-md-1 col-sm-1">
                     <input type="button" value="Compile" onclick="compile()" class="btn btn-xlg btn-primary"/>
@@ -351,6 +455,14 @@ ace.define('ace/mode/fsharp', function (require, exports, module)
                     <input type="button" value="Tooltip" onclick="getTooltip()" class="btn btn-xlg btn-primary"/>
                 </div>
             </div>
+            
+            
         </div>
+        
+        <div id="overlay" style="position: absolute; z-index: 1000; display: none">
+            <div id="overlayText" style="background: #333333; color: #EEEEEE; font-family: Consolas; font-size: 10pt">
+            </div>
+        </div>
+        
     </body>
 </html>

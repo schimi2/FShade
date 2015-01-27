@@ -159,8 +159,8 @@ module FShadeService =
             let temp = Path.ChangeExtension(ns, ".fs")
             let assPath = Path.ChangeExtension(temp, ".dll")
 
-            let code = "namespace " + ns + "\r\n[<ReflectedDefinition>]\r\n" + code
-            let lineOffset = 2
+            let code = "namespace " + ns + "\r\n#nowarn \"1178\"\r\n[<ReflectedDefinition>]\r\n" + code
+            let lineOffset = 3
 
             File.WriteAllText(temp, code)
 
@@ -172,6 +172,10 @@ module FShadeService =
                     "--noframework"; 
                     "--fullpaths"; 
                     "--target:library"; 
+                    "--warn:3"
+                    "--warnaserror:76"
+                    "--nowarn:1178"
+                    "--vserrors"
                     "-o"; assPath; 
                     "-a"; temp; 
                     "-r"; fsCore4310()
@@ -229,7 +233,7 @@ module FShadeService =
 
                 match res with
                     | Success(uniforms, code) ->
-                        Left (uniforms, code)
+                        Left (uniforms, code, errors)
                     | Error e ->
                         Right ({ startLine = -1; startCol = -1; endLine = -1; endCol = -1; message = e; severity = ErrorSeverity.Error; subcategory = "compile"}::errors)
 
@@ -237,6 +241,8 @@ module FShadeService =
             else
                 Right errors
 
+
+    type A = { pos : V3d }
 
     type FsiSession() =
         // Intialize output and input streams
@@ -321,7 +327,18 @@ module FShadeService =
             match tryFindToken (col - 1) 0L with
                 | Some t ->
                     let token = lineText.Substring(t.LeftColumn, 1 + t.RightColumn - t.LeftColumn)
-                    check.GetToolTipTextAlternate(line, col, lineText, [token], t.Tag) |> Async.RunSynchronously
+                    let (FSharpToolTipText(elements)) = check.GetToolTipTextAlternate(line, col, lineText, [token], t.Tag) |> Async.RunSynchronously
+
+                    let elements = 
+                        elements |> List.collect (fun t ->
+                            match t with
+                                | FSharpToolTipElement.Single(t, _) -> [t]
+                                | FSharpToolTipElement.Group(elements) -> elements |> List.map fst
+                                | _ -> []
+                        )
+
+                    elements
+
                 | _ ->
                     failwith "sadsad"
 
@@ -331,10 +348,14 @@ module FShadeService =
 
 
     type CompileRequest = { code : string; composition : list<string> }
+    type CompileResponse = { glsl : string; errors : list<ErrorInfo> }
+    type TooltipRequest = { code : string; row : int; column : int }
+
 
     type HttpService(port : int) =
         let pickler = Nessos.FsPickler.Json.FsPickler.CreateJson(true, true)
         let fsc = Service()
+        let fsi = FsiSession()
 
         let l = new HttpListener()
         do l.Prefixes.Add(sprintf "http://localhost:%d/" port)
@@ -353,29 +374,30 @@ module FShadeService =
                     ctx.Response.Headers.Add("Access-Control-Allow-Origin", "*")
                     ctx.Response.Headers.Add("Access-Control-Origin", "*")
 
-                    if ctx.Request.HttpMethod = "POST" then
+                    if ctx.Request.HttpMethod = "POST" && path = "/" then
                         let reader = new System.IO.StreamReader(ctx.Request.InputStream, System.Text.ASCIIEncoding.ASCII)
                         let data = reader.ReadToEnd()
 
-                        printfn "%s" data
 
                         try 
                             let request : CompileRequest = pickler.UnPickleOfString data
-                            printfn "%A" request
-
                             let code = request.code.Replace("\t", "    ")
 
                             match fsc.CompileEffect "A" code request.composition with
-                                | Left(_,code) ->
+                                | Left(_,code,errors) ->
                                     ctx.Response.StatusCode <- 200
                                     ctx.Response.ContentType <- "text/html"
-                                    let arr = System.Text.ASCIIEncoding.UTF8.GetBytes(code)
+
+                                    let response = { glsl = code; errors = errors }
+                                    let arr = pickler.Pickle response
                                     ctx.Response.OutputStream.Write(arr, 0, arr.Length)
                                     ctx.Response.OutputStream.Close()
-                                | Right e ->
-                                    ctx.Response.StatusCode <- 500
+                                | Right errors ->
+                                    ctx.Response.StatusCode <- 200
                                     ctx.Response.ContentType <- "text/html"
-                                    let arr = System.Text.ASCIIEncoding.UTF8.GetBytes(sprintf "%A" e)
+
+                                    let response = { glsl = ""; errors = errors }
+                                    let arr = pickler.Pickle response
                                     ctx.Response.OutputStream.Write(arr, 0, arr.Length)
                                     ctx.Response.OutputStream.Close()
                         with _ ->
@@ -383,6 +405,40 @@ module FShadeService =
                             ctx.Response.ContentType <- "text/html"
                             ctx.Response.OutputStream.Write(empty, 0, empty.Length)
                             ctx.Response.OutputStream.Close()
+                    elif ctx.Request.HttpMethod = "POST" && path = "/tooltip/" then
+                        let reader = new System.IO.StreamReader(ctx.Request.InputStream, System.Text.ASCIIEncoding.ASCII)
+                        let data = reader.ReadToEnd()
+
+
+                        try 
+                            let request : TooltipRequest = pickler.UnPickleOfString data
+                            let code = request.code.Replace("\t", "    ").Replace("\n", System.Environment.NewLine)
+                            let tt = fsi.GetToolTip code request.row request.column
+
+                            ctx.Response.StatusCode <- 200
+                            ctx.Response.ContentType <- "text/html"
+                            let arr = pickler.Pickle tt
+                            ctx.Response.OutputStream.Write(arr, 0, arr.Length)
+                            ctx.Response.OutputStream.Close()
+
+                        with e ->
+                            ctx.Response.StatusCode <- 500
+                            ctx.Response.ContentType <- "text/html"
+                            ctx.Response.OutputStream.Write(empty, 0, empty.Length)
+                            ctx.Response.OutputStream.Close()
+                    elif ctx.Request.HttpMethod = "POST" && path = "/check/" then
+                        let reader = new System.IO.StreamReader(ctx.Request.InputStream, System.Text.ASCIIEncoding.ASCII)
+                        let code = reader.ReadToEnd()
+                        let code = code.Replace("\t", "    ")
+
+                        let errors = fsi.Check code
+                        ctx.Response.StatusCode <- 200
+                        ctx.Response.ContentType <- "text/html"
+
+                        let response = errors
+                        let arr = pickler.Pickle response
+                        ctx.Response.OutputStream.Write(arr, 0, arr.Length)
+                        ctx.Response.OutputStream.Close()
                     else
                         ctx.Response.StatusCode <- 404
                         ctx.Response.ContentType <- "text/html"
@@ -435,7 +491,7 @@ let main argv =
     let res = fsc.CompileEffect "A" code ["a"; "b"]
 
     match res with
-        | Left(u,c) ->
+        | Left(u,c,e) ->
             printfn "%A" c
 
         | Right err ->

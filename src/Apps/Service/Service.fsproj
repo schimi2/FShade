@@ -54,6 +54,7 @@
   <ItemGroup>
     <Content Include="packages.config" />
     <Content Include="app.config" />
+    <Compile Include="Translator.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
   <ItemGroup>
@@ -74,11 +75,11 @@
       <Private>True</Private>
     </Reference>
     <Reference Include="FsPickler">
-      <HintPath>..\..\..\Packages\FsPickler.1.0.7\lib\net45\FsPickler.dll</HintPath>
+      <HintPath>..\..\..\Packages\FsPickler.1.0.5\lib\net45\FsPickler.dll</HintPath>
       <Private>True</Private>
     </Reference>
     <Reference Include="FsPickler.Json">
-      <HintPath>..\..\..\Packages\FsPickler.Json.1.0.7\lib\net45\FsPickler.Json.dll</HintPath>
+      <HintPath>..\..\..\Packages\FsPickler.Json.1.0.5\lib\net45\FsPickler.Json.dll</HintPath>
       <Private>True</Private>
     </Reference>
     <Reference Include="mscorlib" />

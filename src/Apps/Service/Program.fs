@@ -5,7 +5,10 @@ open Microsoft.FSharp.Compiler.SourceCodeServices
 open System
 open System.IO
 open System.Text
-
+open System.Security
+open System.Security.Policy
+open System.Security.Permissions
+open System.Reflection
 
 module FShadeService =
     open Microsoft.FSharp.Compiler.SimpleSourceCodeServices
@@ -26,6 +29,16 @@ module FShadeService =
     type CompileModuleResult =
         | CompileModuleSuccess of appDomain : IDisposable * moduleType : Type * warnings : list<ErrorInfo>
         | CompileModuleError of errors : list<ErrorInfo>
+
+
+    type AppDomain with
+        static member CreateChildDomain() =
+            let setup = AppDomainSetup()
+            setup.ApplicationBase <- System.Environment.CurrentDirectory
+            let ev = AppDomain.CurrentDomain.Evidence
+
+
+            AppDomain.CreateDomain(Guid.NewGuid().ToString(), ev, setup)
 
 
 
@@ -56,62 +69,11 @@ module FShadeService =
     let private local nm =
         Path.Combine(Environment.CurrentDirectory, nm + ".dll")
 
+    [<AllowNullLiteral>]
+    type Compiler() =
+        inherit MarshalByRefObject()
 
-    type private ShaderCompiler() =
-        static do
-            AppDomain.CurrentDomain.add_ReflectionOnlyAssemblyResolve(fun s e ->
-                try
-                    Assembly.ReflectionOnlyLoad(e.Name)
-                with _ ->
-                    null
-            )
-    
-        member x.Compile(ass : byte[], typeName : string, composition : string[]) =
-            let composition = composition |> Array.toList
-
-            Assembly.LoadFile (sysLib "System.Drawing") |> ignore
-            Assembly.LoadFile (local "Aardvark.Base") |> ignore
-            Assembly.LoadFile (local "Aardvark.Base.TypeProviders") |> ignore
-            Assembly.LoadFile (local "Aardvark.Base.FSharp") |> ignore
-            Assembly.LoadFile (local "FShade.Compiler") |> ignore
-            Assembly.LoadFile (local "FShade") |> ignore
-            let ass = Assembly.Load(ass)
-            let t = ass.GetType(typeName)
-
-            let methods = composition |> List.map t.GetMethod
-
-            if methods |> List.forall (fun m -> m <> null) then
-                let definitions = methods |> List.map Microsoft.FSharp.Quotations.Expr.TryGetReflectedDefinition
-
-                if definitions |> List.forall Option.isSome then
-                    let definitions = definitions |> List.map Option.get
-
-                    let shaders = definitions |> List.map lambdaToShader
-
-                    let effects = definitions |> List.map (fun e ->
-                        compile {
-                            let! s = lambdaToShader e
-                            match s with
-                                | [s] ->
-                                    let effect = toEffectInternal s
-                                    return effect
-                                | _ ->
-                                    return! error "functions can only yield one shader"
-                        }
-                    )
-
-                    let composed = compose effects
-
-                    GLES.compileEffect composed
-                else
-                    Error "could not find definitions for some of the specified functions"
-
-            else
-                Error "could not find some of the specified functions"
-                
-
-
-    type Service() =
+        let createdFiles = System.Collections.Generic.HashSet<string>()
         let scs = SimpleSourceCodeServices()
 
         let newNamespace() =
@@ -127,6 +89,7 @@ module FShadeService =
             if methods |> List.forall (fun m -> m <> null) then
                 let definitions = methods |> List.map Microsoft.FSharp.Quotations.Expr.TryGetReflectedDefinition
 
+
                 if definitions |> List.forall Option.isSome then
                     let definitions = definitions |> List.map Option.get
 
@@ -153,6 +116,8 @@ module FShadeService =
             else
                 Error "could not find some of the specified functions"
 
+        member x.CreatedFiles = createdFiles |> Seq.toList
+    
         member x.CompileEffect (moduleName : string) (code : string) (composition : list<string>) =
             let ns = newNamespace()
             
@@ -164,7 +129,9 @@ module FShadeService =
 
             File.WriteAllText(temp, code)
 
-            Log.startTimed "compiling %s" ns
+
+
+            //Log.startTimed "compiling %s" ns
             let errors, exitCode = 
                 scs.Compile [| 
                     "--simpleresolution"; 
@@ -186,7 +153,7 @@ module FShadeService =
                     "-r"; "FShade.Compiler.dll"
                     "-r"; "FShade.dll"
                 |]
-
+//
 //            let args =
 //                [| 
 //                    "--simpleresolution"; 
@@ -194,6 +161,10 @@ module FShadeService =
 //                    "--noframework"; 
 //                    "--fullpaths"; 
 //                    "--target:library"; 
+//                    "--warn:3"
+//                    "--warnaserror:76"
+//                    "--nowarn:1178"
+//                    "--vserrors"
 //                    "-o"; assPath; 
 //                    "-a"; temp; 
 //                    "-r"; fsCore4310()
@@ -208,7 +179,7 @@ module FShadeService =
 //            let errors, exitCode, assembly =
 //                scs.CompileToDynamicAssembly(args, execute = None)
 
-            Log.stop()
+            File.Delete temp
 
 
             let errors = 
@@ -217,19 +188,22 @@ module FShadeService =
                        |> List.map (fun err -> { err with startLine = err.startLine - lineOffset; endLine = err.endLine - lineOffset})
 
             if exitCode = 0 then
+                let assPath = Path.GetFullPath assPath
+                createdFiles.Add assPath |> ignore
+                let assembly = Assembly.LoadFile assPath |> Some
 
-                //let res = compile assembly.Value (ns + "." + moduleName) composition
+                let res = compile assembly.Value (ns + "." + moduleName) composition
 
 
-                let d = AppDomain.CreateDomain(ns)
-                let data = File.ReadAllBytes(assPath)
+//                let d = AppDomain.CreateDomain(ns)
+//                let data = File.ReadAllBytes(assPath)
                 //File.Delete(assPath)
 
-                let instance = d.CreateInstanceAndUnwrap(Assembly.GetAssembly(typeof<ShaderCompiler>).FullName, typeof<ShaderCompiler>.FullName) |> unbox<ShaderCompiler>
-                Log.startTimed "translating %s" ns
-                let res = instance.Compile(data, ns + "." + moduleName, composition |> List.toArray)
-                Log.stop()
-                AppDomain.Unload(d)
+//                let instance = d.CreateInstanceAndUnwrap(Assembly.GetAssembly(typeof<ShaderCompiler>).FullName, typeof<ShaderCompiler>.FullName) |> unbox<ShaderCompiler>
+//                Log.startTimed "translating %s" ns
+//                let res = instance.Compile(data, ns + "." + moduleName, composition |> List.toArray)
+//                Log.stop()
+//                AppDomain.Unload(d)
 
                 match res with
                     | Success(uniforms, code) ->
@@ -241,10 +215,10 @@ module FShadeService =
             else
                 Right errors
 
-
-    type A = { pos : V3d }
-
     type FsiSession() =
+       
+        inherit MarshalByRefObject()
+
         // Intialize output and input streams
         let sbOut = new StringBuilder()
         let sbErr = new StringBuilder()
@@ -299,10 +273,68 @@ module FShadeService =
             sbErr.Clear() |> ignore
             sbOut.Clear() |> ignore
 
+
+
         member x.References(r : list<string>) =
             for r in r do
                 let c = "#r @\"" + r + "\""
                 fsiSession.EvalInteraction c
+
+        member x.GetQuotations (moduleName : string) (functions : list<string>) =
+            match fsiSession.EvalExpression(sprintf "typeof<%s.Marker>.DeclaringType" moduleName) with
+                | Some v ->
+                    match v.ReflectionValue with
+                        | :? Type as t ->
+                            let methods = functions |> List.map t.GetMethod
+
+                            if methods |> List.forall (fun mi -> mi <> null) then
+                                let defs = methods |> List.map Expr.TryGetReflectedDefinition
+
+                                if defs |> List.forall Option.isSome then
+                                    defs |> List.map Option.get |> Some
+                                else
+                                    None
+                            else
+                                None
+
+                        | _ ->
+                            None
+                | None -> None
+
+        member x.CompileShader (moduleName : string) (functions : list<string>) =
+            match x.GetQuotations moduleName functions with
+                | Some definitions ->
+                    let shaders = definitions |> List.map lambdaToShader
+
+                    let effects = definitions |> List.map (fun e ->
+                        compile {
+                            let! s = lambdaToShader e
+                            match s with
+                                | [s] ->
+                                    let effect = toEffectInternal s
+                                    return effect
+                                | _ ->
+                                    return! error "functions can only yield one shader"
+                        }
+                    )
+
+                    let composed = compose effects
+
+                    GLES.compileEffect composed
+                | None ->
+                    Error "could not find at least one of the shaders in the composition"
+
+
+
+        member x.Eval(code : string) =
+            match fsiSession.EvalExpression(code) with
+                | Some v ->
+                    let va = v.ReflectionValue
+                    Some va
+                | None -> None
+
+        member x.Interact(code : string) =
+            fsiSession.EvalInteraction(code)
 
         member x.Check(code : string) =
             let (parse, check,_) = fsiSession.ParseAndCheckInteraction(code)
@@ -342,6 +374,150 @@ module FShadeService =
                 | _ ->
                     failwith "sadsad"
 
+
+    type Service() =
+        let mutable useCount = 0
+        let l = obj()
+        let mutable d : AppDomain = null
+        let mutable c : Compiler = null
+        let checker = FsiSession()
+
+        let simpleCode = "module A =\r\n    open Aardvark.Base\r\n    open FShade.Compiler\r\n    open FShade\r\n    type Vertex = \r\n        { [<Semantic(\"Positions\")>] pos : V4d \r\n          [<Semantic(\"TexCoord\")>] tc : V2d\r\n          [<Semantic(\"Colors\")>] color : V4d\r\n        }\r\n\r\n    let a (x : Vertex) =\r\n        vertex {\r\n            return { x with pos = (uniform?ModelTrafo : M44d) * x.pos }\r\n        }\r\n\r\n    let b (x : Vertex) =\r\n        fragment {\r\n            return x.color\r\n        }\r\n        \r\n    let c (x : Vertex) =\r\n        fragment {\r\n            return x.color * V4d(x.tc.Y, x.tc.Y, 2.0, 1.0)\r\n        }"
+
+
+        let createNewCompiler() =
+            async {
+                let d' = AppDomain.CreateChildDomain()
+                let instance = d'.CreateInstanceAndUnwrap(typeof<Compiler>.Assembly.FullName, typeof<Compiler>.FullName) |> unbox<Compiler>
+                instance.CompileEffect "A" simpleCode ["a"; "b"; "c"] |> ignore
+                
+
+                let files = ref []
+                let oldDomain = ref null
+                lock l (fun () ->
+                    files := if c <> null then c.CreatedFiles else []
+                    oldDomain := d
+                    d <- d'
+                    c <- instance
+                    useCount <- 0
+                    Log.line "compiler ready"
+                )
+
+                if !oldDomain <> null then
+                    AppDomain.Unload(!oldDomain)
+
+                for f in !files do
+                    try File.Delete f
+                    with e -> printfn "%A" e
+
+            }
+
+        do createNewCompiler() |> Async.RunSynchronously
+
+        member x.Check code =
+            checker.Check code
+
+        member x.GetTooltip code line col =
+            checker.GetToolTip code line col
+
+        member x.CompileEffect (moduleName : string) (code : string) (composition : list<string>) =
+            if useCount = 5 then
+                Log.line "creating new compiler instance"
+                createNewCompiler() |> Async.StartAsTask |> ignore
+            useCount <- useCount + 1
+
+            lock l (fun () ->
+                Log.startTimed "compile"
+                let res = c.CompileEffect moduleName code composition
+                Log.stop()
+                res
+            ) 
+
+
+
+
+    type QuotationExtractor() =
+        let cancel = new System.Threading.CancellationTokenSource()
+
+        let mutable interactionCount = 0
+        let l = obj()
+        let mutable domain = null
+        let mutable fsi = Unchecked.defaultof<FsiSession> //domain.CreateInstanceAndUnwrap(typeof<FsiSession>.Assembly.FullName, typeof<FsiSession>.Name) |> unbox<FsiSession>
+
+
+        let compileModule (f : FsiSession) (log : bool) (moduleName : string) (code : string) (composition : list<string>) =
+            let errors = f.Check(code)
+
+            if errors |> List.exists (fun e -> e.severity = ErrorSeverity.Error) then
+                Right errors
+            else
+                let code = "#nowarn \"1178\"\r\n[<ReflectedDefinition>]\r\n" + code + "\r\n    type Marker = Marker\r\n"
+                let lineOffset = 2
+
+                let sw = System.Diagnostics.Stopwatch()
+                sw.Start()
+                f.Interact code
+                let res = f.CompileShader moduleName composition
+                sw.Stop()
+                if log then Log.line "compile took: %fms" sw.Elapsed.TotalMilliseconds
+
+
+                match res with
+                    | Success(uniforms, code) ->
+
+                        Left (uniforms, code, errors)
+                    | Error e ->
+                        Right ({ startLine = -1; startCol = -1; endLine = -1; endCol = -1; message = e; severity = ErrorSeverity.Error; subcategory = "compile"}::errors)
+
+        let simpleCode = "module A =\r\n    open Aardvark.Base\r\n    open FShade.Compiler\r\n    open FShade\r\n    type Vertex = \r\n        { [<Semantic(\"Positions\")>] pos : V4d \r\n          [<Semantic(\"TexCoord\")>] tc : V2d\r\n          [<Semantic(\"Colors\")>] color : V4d\r\n        }\r\n\r\n    let a (x : Vertex) =\r\n        vertex {\r\n            return { x with pos = (uniform?ModelTrafo : M44d) * x.pos }\r\n        }\r\n\r\n    let b (x : Vertex) =\r\n        fragment {\r\n            return x.color\r\n        }\r\n        \r\n    let c (x : Vertex) =\r\n        fragment {\r\n            return x.color * V4d(x.tc.Y, x.tc.Y, 2.0, 1.0)\r\n        }"
+
+        let reset() =
+            async {
+                let d = AppDomain.CreateChildDomain()
+
+                let assName = Assembly.GetAssembly(typeof<FsiSession>).FullName
+                let f = d.CreateInstanceAndUnwrap(assName, typeof<FsiSession>.FullName) 
+
+
+                let f = f |> unbox<FsiSession>
+                compileModule f false "A" simpleCode ["a"; "b"; "c"] |> ignore
+
+                let oldDomain = ref null
+                lock l (fun () ->   
+                    oldDomain := domain
+                    domain <- d
+                    fsi <- f
+                    interactionCount <- 0
+                )
+                Log.line "FSI running"
+
+                if !oldDomain <> null then
+                    AppDomain.Unload(!oldDomain)
+
+                
+            }
+
+        do reset() |> Async.RunSynchronously
+
+
+        member x.StartReset() =
+            Async.StartAsTask(reset(), cancellationToken = cancel.Token) |> ignore
+
+        member x.Check(code : string) =
+            fsi.Check(code)
+
+        member x.GetTooltip code line col =
+            fsi.GetToolTip code line col
+
+        member x.CompileEffect(moduleName : string) (code : string) (composition : list<string>) =
+            if interactionCount = 5 then
+                Log.line "restarting FSI"
+                x.StartReset()
+            interactionCount <- interactionCount + 1
+
+            lock l (fun () ->
+                compileModule fsi true moduleName code composition
+            )
     
     open System.Net
     open System.Net.Sockets
@@ -354,8 +530,7 @@ module FShadeService =
 
     type HttpService(port : int) =
         let pickler = Nessos.FsPickler.Json.FsPickler.CreateJson(true, true)
-        let fsc = Service()
-        let fsi = FsiSession()
+        let service = Service()
 
         let l = new HttpListener()
         do l.Prefixes.Add(sprintf "http://localhost:%d/" port)
@@ -383,7 +558,7 @@ module FShadeService =
                             let request : CompileRequest = pickler.UnPickleOfString data
                             let code = request.code.Replace("\t", "    ")
 
-                            match fsc.CompileEffect "A" code request.composition with
+                            match service.CompileEffect "A" code request.composition with
                                 | Left(_,code,errors) ->
                                     ctx.Response.StatusCode <- 200
                                     ctx.Response.ContentType <- "text/html"
@@ -400,7 +575,7 @@ module FShadeService =
                                     let arr = pickler.Pickle response
                                     ctx.Response.OutputStream.Write(arr, 0, arr.Length)
                                     ctx.Response.OutputStream.Close()
-                        with _ ->
+                        with e ->
                             ctx.Response.StatusCode <- 500
                             ctx.Response.ContentType <- "text/html"
                             ctx.Response.OutputStream.Write(empty, 0, empty.Length)
@@ -413,7 +588,7 @@ module FShadeService =
                         try 
                             let request : TooltipRequest = pickler.UnPickleOfString data
                             let code = request.code.Replace("\t", "    ").Replace("\n", System.Environment.NewLine)
-                            let tt = fsi.GetToolTip code request.row request.column
+                            let tt = service.GetTooltip code request.row request.column
 
                             ctx.Response.StatusCode <- 200
                             ctx.Response.ContentType <- "text/html"
@@ -431,7 +606,7 @@ module FShadeService =
                         let code = reader.ReadToEnd()
                         let code = code.Replace("\t", "    ")
 
-                        let errors = fsi.Check code
+                        let errors = service.Check code
                         ctx.Response.StatusCode <- 200
                         ctx.Response.ContentType <- "text/html"
 

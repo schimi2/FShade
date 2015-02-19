@@ -26,9 +26,13 @@ module FShadeService =
     type ErrorInfo =
         { startLine : int; startCol : int; endLine : int; endCol : int; message : string; severity : ErrorSeverity; subcategory : string }
     
+    type Symbol =
+        { kind : string; displayName : string; fullName : string; parameters : string; returnType : string }
+
     type CompileModuleResult =
         | CompileModuleSuccess of appDomain : IDisposable * moduleType : Type * warnings : list<ErrorInfo>
         | CompileModuleError of errors : list<ErrorInfo>
+
 
 
     type AppDomain with
@@ -374,6 +378,14 @@ module FShadeService =
                 | _ ->
                     failwith "sadsad"
 
+        member x.GetCompletions (code : string) (line : int) (col : int) =
+            let (parse, check, asdas) = fsiSession.ParseAndCheckInteraction(code)
+            let lineText = getLine code (line - 1)
+            async {
+                let! b = check.GetDeclarationSymbols(Some parse, line, col, lineText, [], "")
+                let! a = check.GetAllUsesOfAllSymbolsInFile()
+                return a |> Array.tryFind(fun su -> su.RangeAlternate.StartLine >= line),b
+            }
 
     type Service() =
         let mutable useCount = 0
@@ -416,6 +428,59 @@ module FShadeService =
 
         member x.Check code =
             checker.Check code
+
+        member x.GetCompletions code line col =
+            let rec typeName (t : FSharpType) =
+//                if t.HasTypeDefinition then
+//                    let n = t.TypeDefinition.DisplayName
+//                    if t.GenericArguments.Count > 0 then
+//                        let suffix = t.GenericArguments |> Seq.map (fun a -> typeName a) |> String.concat "," |> sprintf "<%s>"
+//                        n + suffix
+//                    else
+//                        n
+//                else
+                    t.Format FSharpDisplayContext.Empty
+
+            async {
+                let! (sym, completions) = checker.GetCompletions code line col
+                printfn "%A" sym
+                return completions |> List.map (fun a -> a |> List.map (fun (c : FSharpSymbol) -> 
+                    match c with
+                        | :? FSharpMemberOrFunctionOrValue as c ->
+                            let kind =
+                                if c.IsProperty then "property"
+                                elif c.IsActivePattern then "activepattern"
+                                elif c.IsEvent then "event"
+                                elif c.IsMember then "member"
+                                else "field"
+
+                            let name = 
+                                if c.GenericParameters.Count > 0 then
+                                    let suffix = c.GenericParameters |> Seq.map (fun g -> g.Name) |> String.concat ", " |> sprintf "<%s>"
+                                    c.DisplayName + suffix
+                                else
+                                    c.DisplayName
+
+                            
+                            let parameters =
+                                c.CurriedParameterGroups 
+                                    |> Seq.map (fun g -> 
+                                        g |> Seq.map (fun p -> 
+                                            let n = match p.Name with | Some n -> n | _ -> "arg"
+                                            sprintf "%s : %s" n (typeName p.Type)
+                                        ) |> String.concat ", " |> sprintf "(%s)"
+                                    ) |> String.concat " "
+
+                          
+
+                            let retType = typeName c.ReturnParameter.Type
+                            
+                            { kind = kind; displayName = name; fullName = c.FullName; parameters = parameters; returnType = retType }
+                        | _ -> 
+                            { kind = "unknown"; displayName = c.DisplayName; fullName = c.FullName;  parameters = ""; returnType = "" }
+                    ))
+ 
+            } |> Async.RunSynchronously
 
         member x.GetTooltip code line col =
             checker.GetToolTip code line col
@@ -508,6 +573,9 @@ module FShadeService =
 
         member x.GetTooltip code line col =
             fsi.GetToolTip code line col
+
+        member x.GetCompletions code line col =
+            fsi.GetCompletions code line col
 
         member x.CompileEffect(moduleName : string) (code : string) (composition : list<string>) =
             if interactionCount = 5 then
@@ -614,6 +682,28 @@ module FShadeService =
                         let arr = pickler.Pickle response
                         ctx.Response.OutputStream.Write(arr, 0, arr.Length)
                         ctx.Response.OutputStream.Close()
+
+                    elif ctx.Request.HttpMethod = "POST" && path = "/completions/" then
+                        let reader = new System.IO.StreamReader(ctx.Request.InputStream, System.Text.ASCIIEncoding.ASCII)
+                        let data = reader.ReadToEnd()
+
+                        try 
+                            let request : TooltipRequest = pickler.UnPickleOfString data
+                            let code = request.code.Replace("\t", "    ").Replace("\n", System.Environment.NewLine)
+                            let tt = service.GetCompletions code request.row request.column
+
+                            ctx.Response.StatusCode <- 200
+                            ctx.Response.ContentType <- "text/html"
+                            let arr = pickler.Pickle tt
+                            ctx.Response.OutputStream.Write(arr, 0, arr.Length)
+                            ctx.Response.OutputStream.Close()
+
+                        with e ->
+                            ctx.Response.StatusCode <- 500
+                            ctx.Response.ContentType <- "text/html"
+                            ctx.Response.OutputStream.Write(empty, 0, empty.Length)
+                            ctx.Response.OutputStream.Close()
+
                     else
                         ctx.Response.StatusCode <- 404
                         ctx.Response.ContentType <- "text/html"
@@ -653,7 +743,10 @@ open Aardvark.Base
 
 [<EntryPoint>]
 let main argv =
-    
+//    
+//    Logging.TestLogging.run()
+//    System.Environment.Exit(0)
+
     let s = FShadeService.HttpService(1337)
     s.Run()
 

@@ -374,7 +374,10 @@ module Expressions =
                 // TODO: this might not be sufficient since changes will not be reflected in the shader-code.
                 //       Is this even possible without completely altering the compiler?
                 | PropertyGet(None, p ,[]) ->
-                    return! compileExpression lastExpression isStatement (Expr.Value(p.GetValue(null), p.PropertyType))
+                    if p.DeclaringType.Assembly.FullName.Contains "Generated_" then
+                        return! error "cannot evaluate properties in dynamic assemblies"
+                    else
+                        return! compileExpression lastExpression isStatement (Expr.Value(p.GetValue(null), p.PropertyType))
 
                 | FieldGet(None, f) ->
                     return! compileExpression lastExpression isStatement (Expr.Value(f.GetValue(null), f.FieldType))

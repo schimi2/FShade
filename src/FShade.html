@@ -215,6 +215,7 @@ ace.define('ace/mode/fsharp', function (require, exports, module)
 		</script>
 		
         <script type="text/javascript">
+            var server = "localhost";//"tatooine.awx.at"
 			var editor = null;
 			var glsl = null;
 			var timer;
@@ -222,6 +223,39 @@ ace.define('ace/mode/fsharp', function (require, exports, module)
             var last = { row: -1, column: -1 };
             var mousePosition = { top: 0, left: 0 };
             
+            
+            function getCompletions() {
+                var text = unescape(editor.getSession().getValue());
+                var row = editor.selection.selectionAnchor.row;
+                var col = editor.selection.selectionAnchor.column;
+                
+                //alert("row: " + row + " col: "+ col);
+                
+                $.post("http://" + server + ":1337/completions/", JSON.stringify({ code: text, row: 1 + row, column: 1 + col }), function(res) {
+                    alert(res);
+                    /*var list = $.parseJSON(res);
+                    
+                    var text = ""
+                    var count = list.length < 5 ? list.length : 5;
+                    
+                    for(var i = 0; i < count; i++) {
+                        var line = list[i];
+                        if(line.length >= 70)
+                            line = line.substr(0, 67) + "...";
+                        text += line + "<br>"
+                    }
+                    
+                    if(list.length >= 5)
+                        text += "..."
+                    
+                    $("#overlayText").html(text);
+                    $("#overlay")
+                        .css({ top : mousePosition.top + 10, left: mousePosition.left + 15 })
+                        .fadeIn(20);
+                    
+                    */
+                });
+            }
             
             function gotErrors(errors) {
                 var str = ""
@@ -246,7 +280,7 @@ ace.define('ace/mode/fsharp', function (require, exports, module)
             
             function mouseStopped() {
                 var text = unescape(editor.getSession().getValue());
-                $.post("http://localhost:1337/tooltip/", JSON.stringify({ code: text, row: 1 + last.row, column: 1 + last.column }), function(res) {
+                $.post("http://" + server + ":1337/tooltip/", JSON.stringify({ code: text, row: 1 + last.row, column: 1 + last.column }), function(res) {
                     var list = $.parseJSON(res);
                     
                     var text = ""
@@ -332,7 +366,7 @@ ace.define('ace/mode/fsharp', function (require, exports, module)
         
             function check() {
                 var text = unescape(editor.getSession().getValue());
-                $.post("http://localhost:1337/check/", text,  function(result) {
+                $.post("http://" + server + ":1337/check/", text,  function(result) {
                     var errors = $.parseJSON(result);
                     gotErrors(errors);
                 });
@@ -343,7 +377,7 @@ ace.define('ace/mode/fsharp', function (require, exports, module)
 				var composition = $("#composition").val().split(" ").clean("");
 				
 				console.log(text)
-                $.post("http://localhost:1337/", JSON.stringify({ code: text, composition: composition }),  
+                $.post("http://" + server + ":1337/", JSON.stringify({ code: text, composition: composition }),  
                     function(result) {
                         var response = $.parseJSON(result);
                         
@@ -452,7 +486,7 @@ ace.define('ace/mode/fsharp', function (require, exports, module)
                     <input type="button" value="Compile" onclick="compile()" class="btn btn-xlg btn-primary"/>
                 </div>
                 <div class="col-md-1 col-sm-1">
-                    <input type="button" value="Tooltip" onclick="getTooltip()" class="btn btn-xlg btn-primary"/>
+                    <input type="button" value="Complete" onclick="getCompletions()" class="btn btn-xlg btn-primary"/>
                 </div>
             </div>
             

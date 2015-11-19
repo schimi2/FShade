@@ -20,6 +20,7 @@ NUGET
   specs:
     DevILSharp (0.0.11)
     FSharp.Compiler.Service (0.0.90)
+    Mono.Reflection (1.0.0.0)
     Newtonsoft.Json (7.0.1)
     OpenTK (1.1.1589.5942)
     RegexProvider (0.0.5)

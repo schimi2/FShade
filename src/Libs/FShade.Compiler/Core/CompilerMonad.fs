@@ -49,12 +49,7 @@ module StateHelpers =
 module CompilerMonad = 
 
     type CompilerBuilder() =
-//        member x.Bind(m : Error<'a>, f : 'a -> Compiled<'b, 's>) : Compiled<'b, 's> =
-//            { runCompile = fun s ->
-//                match m with
-//                    | Success v -> (f v).runCompile s
-//                    | Error e -> Error e
-//            }
+
         member x.Bind(m : Compiled<'a, 's>, f : 'a -> Compiled<'b, 's>) : Compiled<'b, 's> =
             { runCompile = fun s -> 
                 match m.runCompile s with
@@ -66,8 +61,7 @@ module CompilerMonad =
                 elements |> Seq.fold (fun s e -> 
                                 match s with
                                     | Success (s, ()) -> (f e).runCompile s 
-                                    | Error e ->
-                                        Error e
+                                    | Error e -> Error e
                             ) (Success(s, ())) }
 
         member x.Delay(f : unit -> Compiled<'a, 's>) = 
@@ -79,6 +73,13 @@ module CompilerMonad =
                                     
         member x.ReturnFrom(m : Compiled<'a, 's>) = 
             m
+
+        member x.Run(c : Compiled<'a, 's>) =
+            { runCompile = fun s ->
+                match c.runCompile s with
+                    | Success (s,v) -> Success(s,v)
+                    | Error e -> Error e
+            }
 
     type ErrorMonadBuilder() =
         member x.Bind(e : Error<'a>, f : 'a -> Error<'b>) =

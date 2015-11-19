@@ -63,6 +63,7 @@
     <Compile Include="Core\MemoCache.fs" />
     <Compile Include="Frontend\Primitives.fs" />
     <Compile Include="Frontend\Builders.fs" />
+    <Compile Include="Compilation\Reflector.fs" />
     <Compile Include="Compilation\ShaderState.fs" />
     <Compile Include="Compilation\ParameterCompilation.fs" />
     <Compile Include="Compilation\BuilderCompilation.fs" />

@@ -6,6 +6,8 @@ open FShade
 open FShade.Demo
 
 
+let (!!) (r : ref<'a>) = !r
+
 module Simple =
     open Aardvark.Base
     open FShade
@@ -128,46 +130,11 @@ module Dead =
             }
         }
 
-    let BillboardGeometry (sizes: V2d) (distanceScalingFactor : float -> float) (v : Point<BillboardVertex>) =
-        let targetRange = 5.0
-
-        _triangle<4 N> {
-            let s = sizes
-            let offsetX = s.X
-            let offsetY = s.Y
-
-            let bv = v.Value
-            let pos = bv.position
-            let vp = bv.viewPos
-            let c = bv.color
-
-            let factor =
-                let d = abs(vp.Z)
-                let e = 
-                    if d < targetRange then
-                        1.0 - ( d / targetRange )
-                    else
-                        0.0
-                1.0 + e
-        
-            let offsetX = offsetX * factor
-            let offsetY = offsetY * factor
-
-            let TopLeft =       V4d(vp.XYZ + V3d(   -offsetX,   -offsetY, 0.0),vp.W)
-            let TopRight =      V4d(vp.XYZ + V3d(    offsetX,   -offsetY, 0.0),vp.W)
-            let BottomLeft =    V4d(vp.XYZ + V3d(   -offsetX,    offsetY, 0.0),vp.W)
-            let BottomRight =   V4d(vp.XYZ + V3d(    offsetX,    offsetY, 0.0),vp.W)
-
-            let TLO =   uniform.ProjTrafo * TopLeft
-            let TRO =   uniform.ProjTrafo * TopRight
-            let BLO =   uniform.ProjTrafo * BottomLeft
-            let BRO =   uniform.ProjTrafo * BottomRight
-        
-            yield { position = TLO; color = c; texCoord = V2d(0, 1); viewPos = vp }
-            yield { position = TRO; color = c; texCoord = V2d(1, 1); viewPos = vp }
-            yield { position = BLO; color = c; texCoord = V2d(0, 0); viewPos = vp }
-            yield { position = BRO; color = c; texCoord = V2d(1, 0); viewPos = vp }
-            }
+    let BillboardGeometry (sizes: V2d) (distanceScalingFactor : ref<float>) (v : Point<BillboardVertex>) =
+        triangle {
+            let f = !!distanceScalingFactor
+            yield { position = V4d(1,1,1,1); color = V4d(1,1,1,1); texCoord = V2d(0, 1); viewPos = V4d(1,1,1,1) }
+        }
 
     let BillboardFragment (color: V4d) (v : BillboardVertex) =
         fragment {
@@ -187,7 +154,19 @@ module Dead =
                 return V4d(0,0,0,0)
         } 
            
-            
+   
+module RefsAsUniforms =
+    open Microsoft.FSharp.Quotations
+    open Microsoft.FSharp.Quotations.Patterns
+
+    let detectRef (f : Expr) =
+        match f with
+            | Call(None, mi, [Value(arg,t)]) when mi.Name = "op_BangBang" ->
+                Some (UserUniform(t.GetGenericArguments().[0], arg))
+
+            | _ ->
+                None
+         
             
 
 
@@ -203,7 +182,15 @@ let main argv =
                   Simple.white |> toEffect
                   ] |> compose
 
-    let effect = [Dead.BillboardTrafo |> toEffect; Dead.BillboardGeometry V2d.II id |> toEffect; Dead.BillboardFragment V4d.IIII |> toEffect] |> compose
+    uniformDetectors <- [RefsAsUniforms.detectRef]
+
+    let r = ref 1.0
+    let effect = [Dead.BillboardTrafo |> toEffect; Dead.BillboardGeometry V2d.II r |> toEffect; Dead.BillboardFragment V4d.IIII |> toEffect] |> compose
+
+
+
+    let e0 = toEffect (Dead.BillboardGeometry V2d.II (ref 0.0))
+    let e1 = toEffect (Dead.BillboardGeometry V2d.II (ref 1.0))
 
 //    match GLSL.compileEffect effect with
 //        | Success (uniforms, code) ->

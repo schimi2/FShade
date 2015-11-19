@@ -26,7 +26,10 @@ module EffectCompilation =
 
                     //replace all uniforms with variables and return a map
                     let! body = substituteUniforms body
-                    
+                    let! state0 = compilerState
+                    let uniforms0  = state0.uniforms |> HashMap.toList
+
+
                     //replace all input-accesses with variables and return a map
                     let a = List.head args
                     let! body = substituteInputs a.Type None body
@@ -38,7 +41,7 @@ module EffectCompilation =
 
                     let! state = compilerState
 
-                    let uniforms  = state.uniforms |> HashMap.toList
+                    let uniforms  = uniforms0
 
                     let builder = match state.builder with
                                         | Some b -> 
@@ -178,7 +181,7 @@ module EffectCompilation =
           initialUserState = ShaderState.emptyShaderState  
         }
 
-    let private toEffectCache = GenericMemoCache()
+    
     let private createEffect (f : 'a -> Expr<'b>) =
         let compiled =
             transform {
@@ -198,9 +201,106 @@ module EffectCompilation =
             | Success (_,v) -> Success v
             | Error e -> Error e
 
-    let toEffect (f : 'a -> Expr<'b>) =
-        toEffectCache.Invoke(createEffect, f)
+
+
+    let private tryReplaceUserUniformsInShader (oldClosure : Reflection.Closure) (newClosure : Reflection.Closure) (s : Shader) =
         
+        let userUniformValues =
+            s.uniforms 
+                |> List.choose (fun (u,_) ->
+                    match u with
+                        | UserUniform(t,v) -> Some v
+                        | _ -> None
+                )
+                |> PersistentHashSet.ofList
+        
+        let oldConstants =
+            oldClosure.args
+                |> List.mapi (fun i l ->
+                    match l with
+                        | Reflection.Constant l when PersistentHashSet.contains l userUniformValues -> Some(i,l)
+                        | _ -> None
+                   )
+                |> List.choose id
+
+        let allDistinct = System.Collections.Generic.HashSet(List.map snd oldConstants).Count = List.length oldConstants
+
+        if allDistinct then
+            let success = ref true
+
+            let constants =
+                oldConstants |> List.choose (fun (i,l) ->
+                    match newClosure.args.[i] with
+                        | Reflection.Constant r -> Some (l,r)
+                        | _ -> None
+                )
+
+            let table = constants |> HashMap.ofList
+
+            let newUniforms =
+                s.uniforms |> List.map (fun (u,var) ->
+                    match u with
+                        | UserUniform(t,value) -> 
+                            match HashMap.tryFind value table with
+                                | Some n -> UserUniform(t, n), var
+                                | None -> success := false; u,var //failwithf "could not get user-uniform %A from closure" var
+                        | _ -> u,var
+                )
+            if !success then Some { s with uniforms = newUniforms}
+            else None
+        else
+            None
+
+    let private tryReplaceUserUniforms (oldClosure : Reflection.Closure) (newClosure : Reflection.Closure) (e : Effect) =
+        Aardvark.Base.Monads.Option.option {
+            let! vs =
+                match e.vertexShader with
+                    | Some vs -> tryReplaceUserUniformsInShader oldClosure newClosure vs |> Option.map Some
+                    | None -> Some None
+            let! tcs =
+                match e.tessControlShader with
+                    | Some vs -> tryReplaceUserUniformsInShader oldClosure newClosure vs |> Option.map Some
+                    | None -> Some None
+            let! tev =
+                match e.tessEvalShader with
+                    | Some vs -> tryReplaceUserUniformsInShader oldClosure newClosure vs |> Option.map Some
+                    | None -> Some None
+            let! gs =
+                match e.geometryShader with
+                    | Some (gs,top) -> tryReplaceUserUniformsInShader oldClosure newClosure gs |> Option.map (fun gs -> Some(gs, top))
+                    | None -> Some None
+            let! fs =
+                match e.fragmentShader with
+                    | Some vs -> tryReplaceUserUniformsInShader oldClosure newClosure vs |> Option.map Some
+                    | None -> Some None
+
+            
+
+            return { originals = e.originals; vertexShader = vs; tessControlShader = tcs; tessEvalShader = tev; geometryShader = gs; fragmentShader = fs }
+        }
+
+
+    open System.Collections.Generic
+    open System.Collections.Concurrent
+    let private toEffectCache = 
+        ConcurrentDictionary<System.Reflection.MethodBase, Reflection.Closure * FShadeEffect>()
+
+    let toEffect (f : 'a -> Expr<'b>) =
+        let closure = FShade.Reflection.PartialEvaluator.getClosure f
+        let (originalClosure, template) = toEffectCache.GetOrAdd(closure.inner, fun _ -> closure, createEffect f)
+        
+
+        if originalClosure = closure then
+            template
+        else
+            match template with
+                | Success template ->
+                    match tryReplaceUserUniforms originalClosure closure template with
+                        | Some e -> Success e
+                        | None -> createEffect f
+                | Error e ->
+                    Error e
+
     let private shaderWithDebugInfo (s : Option<Shader>) (info : ShaderDebugInfo) =
         match s with
             | Some s -> Some { s with debugInfo = Some info }

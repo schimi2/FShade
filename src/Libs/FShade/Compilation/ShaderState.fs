@@ -51,6 +51,7 @@ module ShaderState =
 
 
     let transform = CompilerBuilder()
+    let err = ErrorMonadBuilder()
 
     let nextCounter (counterName : string) =
         transform {

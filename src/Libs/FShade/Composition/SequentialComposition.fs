@@ -10,6 +10,7 @@ open Aardvark.Base
 open FShade.Utils
 open FShade.Compiler
 open Aardvark.Base.TypeInfo.Patterns
+open Aardvark.Base.Monads
 
 [<AutoOpen>]
 module SequentialComposition =
@@ -72,7 +73,7 @@ module SequentialComposition =
             | ShapeCombination(o, args) -> RebuildShapeCombination(o, args |> List.map (outputsToVariables mapping hidden cont))
             | _ -> e
 
-    let private composeBinarySimple (l : Shader) (r : Shader) : Compiled<Shader, 'a> =
+    let private composeBinarySimple (l : Shader) (r : Shader) : Error<Shader> =
         let b0 = l.body
         let mutable b1 = r.body
 
@@ -143,25 +144,23 @@ module SequentialComposition =
 //                        | _ -> None
 //                )
 
-        transform {
-            return { shaderType = l.shaderType; inputs = inputs; outputs = outputs; uniforms = uniforms; body = b0; inputTopology = l.inputTopology; debugInfo = None }
-        }
+        Success { shaderType = l.shaderType; inputs = inputs; outputs = outputs; uniforms = uniforms; body = b0; inputTopology = l.inputTopology; debugInfo = None }
 
 
-    let private composeBinaryGeometryVertex (l : Shader * OutputTopology) (r : Shader) : Compiled<Shader * OutputTopology, 'a> =
+    let private composeBinaryGeometryVertex (l : Shader * OutputTopology) (r : Shader) : Error<Shader * OutputTopology> =
         failwith ""
 
-    let private composeBinaryGeometry (l : Shader * OutputTopology) (r : Shader * OutputTopology) : Compiled<Shader * OutputTopology, 'a> =
+    let private composeBinaryGeometry (l : Shader * OutputTopology) (r : Shader * OutputTopology) : Error<Shader * OutputTopology> =
         failwith "geometry composition not possible atm"
 
         
 
-    let private composeBinary (l : Compiled<Effect, 'a>) (r : Compiled<Effect, 'a>) : Compiled<Effect, 'a> =
-        transform {
+    let private composeBinary (l : FShadeEffect) (r : FShadeEffect) : Error<Effect> =
+        err {
             let! l = l
             let! r = r
 
-            let! vs,gs = transform {
+            let! vs,gs = err {
                             match l.vertexShader, l.geometryShader, r.vertexShader, r.geometryShader with
                                 //00** | **00
                                 | (None, None, l, r)|(l, r, None, None) -> 
@@ -185,39 +184,39 @@ module SequentialComposition =
                                 | l, Some lgs, r, Some rgs ->
                                     let! lgs = match r with
                                                 | Some r -> composeBinaryGeometryVertex lgs r
-                                                | _ -> transform { return lgs }
+                                                | _ -> err { return lgs }
 
                                     let! gs = composeBinaryGeometry lgs rgs
                                     return (l, Some gs)
                             }
 
-            let! tcs = transform {
+            let! tcs = err {
                             match l.tessControlShader, r.tessControlShader with
                                 | Some lcs, None -> return Some lcs
                                 | None, Some rcs -> return Some rcs
                                 | None, None -> return None
-                                | _ -> return! error "invalid tessellation-pipeline in composition"
+                                | _ -> return! Error "invalid tessellation-pipeline in composition"
                         }
 
-            let! tev = transform {
+            let! tev = err {
                             match l.tessEvalShader, r.tessEvalShader with
                                 | Some lev, None -> return Some lev
                                 | None, Some rev -> return Some rev
                                 | None, None -> return None
-                                | _ -> return! error "invalid tessellation-pipeline in composition"
+                                | _ -> return! Error "invalid tessellation-pipeline in composition"
                         }
 
             let! fs = match l.fragmentShader, r.fragmentShader with
-                        | Some l, None -> transform { return Some l }
-                        | None, Some r -> transform { return Some r }
-                        | Some l, Some r -> transform { let! fs = composeBinarySimple l r in return Some fs }
-                        | None, None -> transform { return None }
+                        | Some l, None -> err { return Some l }
+                        | None, Some r -> err { return Some r }
+                        | Some l, Some r -> err { let! fs = composeBinarySimple l r in return Some fs }
+                        | None, None -> err { return None }
 
             return { vertexShader = vs; geometryShader = gs; tessControlShader = tcs; tessEvalShader = tev; fragmentShader = fs; originals = List.concat [l.originals; r.originals] }
         }
 
-    let rec compose (l : #seq<Compiled<Effect, 'a>>) =
-        let mutable result = compile { return { vertexShader = None; geometryShader = None; tessControlShader = None; tessEvalShader = None; fragmentShader = None; originals = [] } }
+    let rec compose (l : #seq<FShadeEffect>) =
+        let mutable result = Success { vertexShader = None; geometryShader = None; tessControlShader = None; tessEvalShader = None; fragmentShader = None; originals = [] }
         for e in l do
             result <- composeBinary result e
 

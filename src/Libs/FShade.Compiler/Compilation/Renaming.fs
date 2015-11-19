@@ -61,7 +61,8 @@ module Renaming =
                           defines = s.defines
                           functionId = s.functionId
                           bound = s.bound
-                          userState = userState}
+                          userState = userState
+                          initialUserState = userState }
             match c.runCompile inner with
                 | Success(inner, v) ->
                     let resultState = { compiler = s.compiler
@@ -76,7 +77,8 @@ module Renaming =
                                         defines = inner.defines
                                         functionId = inner.functionId
                                         bound = inner.bound
-                                        userState = s.userState}
+                                        userState = s.userState
+                                        initialUserState = s.initialUserState }
                     Success(resultState, v)
                 | Error err -> Error err
         }

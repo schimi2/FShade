@@ -63,7 +63,8 @@ and [<NoComparison>] [<NoEquality>] CompilerState<'s> =
           
       bound : Set<Var>
 
-      userState : 's }
+      userState : 's 
+      initialUserState : 's }
    
 /// <summary>
 /// Compiled<'a 's> represents a state-monad where 'a is the resulting type

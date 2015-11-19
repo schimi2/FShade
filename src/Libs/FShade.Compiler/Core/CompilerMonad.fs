@@ -19,23 +19,26 @@ module StateHelpers =
     /// the empty compiler-state for a given compiler. Note that InitialState
     /// is used internally to create a initial userState.
     /// </summary>
-    let emptyCompilerState c = { compiler = c
-                                 types = PersistentHashSet.empty
-                                 functions = PersistentHashSet.empty
-                                 constantId = 0
-                                 constants = HashMap.empty
-
-                                 lambdaId = 0
-                                 lambdas = Map.empty
-
-                                 defines = Map.empty
-                                 functionId = 0
-
-                                 uniformId = 0
-                                 uniforms = HashMap.empty
-
-                                 bound = Set.empty
-                                 userState = c.InitialState() }
+    let emptyCompilerState (c : ICompiler<_>) = 
+        let user = c.InitialState()
+        { compiler = c
+          types = PersistentHashSet.empty
+          functions = PersistentHashSet.empty
+          constantId = 0
+          constants = HashMap.empty
+          
+          lambdaId = 0
+          lambdas = Map.empty
+          
+          defines = Map.empty
+          functionId = 0
+          
+          uniformId = 0
+          uniforms = HashMap.empty
+          
+          bound = Set.empty
+          userState = user 
+          initialUserState = user }
 
 
 /// <summary>
@@ -46,6 +49,12 @@ module StateHelpers =
 module CompilerMonad = 
 
     type CompilerBuilder() =
+//        member x.Bind(m : Error<'a>, f : 'a -> Compiled<'b, 's>) : Compiled<'b, 's> =
+//            { runCompile = fun s ->
+//                match m with
+//                    | Success v -> (f v).runCompile s
+//                    | Error e -> Error e
+//            }
         member x.Bind(m : Compiled<'a, 's>, f : 'a -> Compiled<'b, 's>) : Compiled<'b, 's> =
             { runCompile = fun s -> 
                 match m.runCompile s with
@@ -71,12 +80,58 @@ module CompilerMonad =
         member x.ReturnFrom(m : Compiled<'a, 's>) = 
             m
 
+    type ErrorMonadBuilder() =
+        member x.Bind(e : Error<'a>, f : 'a -> Error<'b>) =
+            match e with
+                | Success v -> f v
+                | Error e -> Error e
+
+        member x.Return(v) = Success v
+        member x.ReturnFrom(v : Error<'a>) = v
+        member x.Delay(f : unit -> Error<'a>) = f
+        member x.Run(f : unit -> Error<'a>) = f()
+        member x.For(s : seq<'a>, f : 'a -> Error<unit>) =
+            let rec acc (l : list<'a>) =
+                match l with
+                    | [] -> Success ()
+                    | v::rest ->
+                        match f v with
+                            | Success () -> acc rest
+                            | Error e -> Error e
+
+            s |> Seq.toList |> acc
+
+        member x.While(guard : unit -> bool, f : unit -> Error<unit>) =
+            if guard() then
+                match f() with
+                    | Success () ->
+                        x.While(guard, f)
+                    | Error e ->
+                        Error e
+            else
+                Success ()
+
+        member x.Zero() = Success()
+
+        member x.Combine (l : Error<unit>, r : unit -> Error<'a>) =
+            match l with
+                | Success () -> r()
+                | Error e -> Error e
+
     let compile = CompilerBuilder()
+    
 
     let runCompile (c : ICompiler<'s>) (v : Compiled<'a,'s>) =
         match v.runCompile (emptyCompilerState c) with
             | Success(_,v) -> Success v
             | Error e -> Error e
+
+    let readFrom (v : Error<'a>) =
+        { runCompile = fun s ->
+            match v with    
+                | Success v -> Success(s,v)
+                | Error e -> Error e
+        }
 
     module Seq = 
         let rec mapCi (f : int -> 'a -> Compiled<'b,'s>) (elements : seq<'a>) : Compiled<seq<'b>,'s> =
@@ -198,7 +253,11 @@ module StateModification =
     let compilerState = { runCompile = fun s -> Success(s,s.userState) }
     let putCompilerState s = { runCompile = fun o -> Success({ o with userState = s },()) }
     let modifyCompilerState f = { runCompile = fun o -> Success({ o with userState = f o.userState },()) }
-    let resetCompilerState = { runCompile = fun o -> Success({ o with userState = o.compiler.ResetState(o.userState) },()) }
+    let resetCompilerState = 
+        { runCompile = fun o -> 
+            if isNull (o.compiler :> obj) then Success ({ o with userState = o.initialUserState}, ())
+            else Success({ o with userState = o.compiler.ResetState(o.userState) },()) 
+        }
 
     let addUsedType t = { runCompile = fun o -> Success({ o with  types = PersistentHashSet.add t o.types },()) }
     let addMethod mi = { runCompile = fun o -> Success({ o with functions = PersistentHashSet.add (MethodFunction mi) o.functions },()) }

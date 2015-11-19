@@ -10,6 +10,8 @@ open Aardvark.Base
 open FShade.Utils
 open FShade.Compiler
 
+type FShadeEffect = Error<Effect> 
+
 [<AutoOpen>]
 module EffectCompilation =
 
@@ -155,20 +157,46 @@ module EffectCompilation =
     let toEffectInternal (s : Shader) =
         toEffectInternalCache.Invoke s
 
+    let private translateState =
+        { compiler = Unchecked.defaultof<_>
+          types = PersistentHashSet.empty
+          functions = PersistentHashSet.empty
+          constantId = 0
+          constants = HashMap.empty
+          
+          lambdaId = 0
+          lambdas = Map.empty
+          
+          defines = Map.empty
+          functionId = 0
+          
+          uniformId = 0
+          uniforms = HashMap.empty
+          
+          bound = Set.empty
+          userState = ShaderState.emptyShaderState 
+          initialUserState = ShaderState.emptyShaderState  
+        }
+
     let private toEffectCache = GenericMemoCache()
     let private createEffect (f : 'a -> Expr<'b>) =
-        transform {
-            let! shaders = toShader' f
-            let mutable result = { vertexShader = None; geometryShader = None; tessControlShader = None; tessEvalShader = None; fragmentShader = None; originals = shaders }
-            do for s in shaders do
-                match s.shaderType with
-                    | Vertex -> result <- { result with vertexShader = Some s }
-                    | Fragment ->  result <- { result with fragmentShader = Some s }
-                    | Geometry(maxVertices, t) ->  result <- { result with geometryShader = Some(s, t) } 
-                    | TessControl ->  result <- { result with tessControlShader = Some s }
-                    | TessEval ->  result <- { result with tessEvalShader = Some s }
-            return result
-        }
+        let compiled =
+            transform {
+                let! shaders = toShader' f
+                let mutable result = { vertexShader = None; geometryShader = None; tessControlShader = None; tessEvalShader = None; fragmentShader = None; originals = shaders }
+                do for s in shaders do
+                    match s.shaderType with
+                        | Vertex -> result <- { result with vertexShader = Some s }
+                        | Fragment ->  result <- { result with fragmentShader = Some s }
+                        | Geometry(maxVertices, t) ->  result <- { result with geometryShader = Some(s, t) } 
+                        | TessControl ->  result <- { result with tessControlShader = Some s }
+                        | TessEval ->  result <- { result with tessEvalShader = Some s }
+                return result
+            }
+
+        match compiled.runCompile translateState with
+            | Success (_,v) -> Success v
+            | Error e -> Error e
 
     let toEffect (f : 'a -> Expr<'b>) =
         toEffectCache.Invoke(createEffect, f)

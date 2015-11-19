@@ -598,9 +598,9 @@ module GLES =
             return { usedTypes = types; uniforms = uniformGetters; uniformBuffers = uniforms; code = completeCode }
         }
 
-    let private compileEffectInternal (e : Compiled<Effect, ShaderState>) =
+    let private compileEffectInternal (e : FShadeEffect) =
         compile {
-            let! e = e
+            let! e = readFrom e
 
             let hasgs = match e.geometryShader with | Some _ -> true | _ -> false
             let topUsed = ["Colors", typeof<V4d>; "Depth", typeof<float>] |> Map.ofList
@@ -833,5 +833,5 @@ module GLES =
     let run e =
         e |> runCompile glsl
 
-    let compileEffect (e : Compiled<Effect, ShaderState>) : Error<Map<string, UniformGetter> * string> =
+    let compileEffect (e : FShadeEffect) : Error<Map<string, UniformGetter> * string> =
         e |> compileEffectInternal |> runCompile glsl

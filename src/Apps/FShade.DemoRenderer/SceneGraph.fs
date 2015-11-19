@@ -180,7 +180,7 @@ module SceneGraph =
 module Sg =
     open SceneGraph
 
-    let shader (name : string) (e : Compiled<Effect, ShaderState>) (sg : ISg) =
+    let shader (name : string) (e : FShadeEffect) (sg : ISg) =
         
         
         match GLSL.compileEffect410 (Map.ofList ["Colors", typeof<V4d>; "Depth", typeof<float>]) e with

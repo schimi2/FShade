@@ -1033,9 +1033,9 @@ module GLSL =
             return { usedTypes = types; uniforms = uniformGetters; uniformBuffers = uniforms; code = completeCode }
         }
 
-    let private compileEffectInternal (neededOutputs : Map<string, Type>) (e : Compiled<Effect, ShaderState>) =
+    let private compileEffectInternal (neededOutputs : Map<string, Type>) (e : FShadeEffect) =
         compile {
-            let! e = e
+            let! e = readFrom e
             let! config = config
 
             let hasgs = match e.geometryShader with | Some _ -> true | _ -> false
@@ -1281,18 +1281,18 @@ module GLSL =
         let c = compilers.GetOrCreate(v, Func<_,_>(fun v -> Compiler(v)))
         e |> runCompile c
 
-    let compileEffect (v : CompilerConfiguration) (neededOutputs : Map<string, Type>) (e : Compiled<Effect, ShaderState>) : Error<Map<string, UniformGetter> * string> =
+    let compileEffect (v : CompilerConfiguration) (neededOutputs : Map<string, Type>) (e : FShadeEffect) : Error<Map<string, UniformGetter> * string> =
         let c = compilers.GetOrCreate(v, Func<_,_>(fun v -> Compiler(v)))
         e |> compileEffectInternal neededOutputs |> runCompile c
 
     let run410 e =
         e |> runCompile glsl410
 
-    let compileEffect410 (neededOutputs : Map<string, Type>) (e : Compiled<Effect, ShaderState>) : Error<Map<string, UniformGetter> * string> =
+    let compileEffect410 (neededOutputs : Map<string, Type>) (e : FShadeEffect) : Error<Map<string, UniformGetter> * string> =
         e |> compileEffectInternal neededOutputs |> runCompile glsl410
 
     let run120 e =
         e |> runCompile glsl120
 
-    let compileEffect120 (neededOutputs : Map<string, Type>) (e : Compiled<Effect, ShaderState>) : Error<Map<string, UniformGetter> * string> =
+    let compileEffect120 (neededOutputs : Map<string, Type>) (e : FShadeEffect) : Error<Map<string, UniformGetter> * string> =
         e |> compileEffectInternal neededOutputs |> runCompile glsl120

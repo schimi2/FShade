@@ -475,7 +475,7 @@ module FSCC =
 
                         let f = build.Invoke(null, [|null; mi|])
 
-                        let effect = toEffect.Invoke(null, [|f|]) |> unbox<Compiled<Effect, ShaderState>>
+                        let effect = toEffect.Invoke(null, [|f|]) |> unbox<FShadeEffect>
 
                         Some effect
                     else 
@@ -535,7 +535,7 @@ module FSCC =
 
                             let f = build.Invoke(null, [|null; mi|])
 
-                            let effect = toEffect.Invoke(null, [|f|]) |> unbox<Compiled<Effect, ShaderState>>
+                            let effect = toEffect.Invoke(null, [|f|]) |> unbox<FShadeEffect>
 
                             Some effect
                         else 

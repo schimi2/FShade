@@ -46,7 +46,7 @@ module EffectEditor =
                 | Fsi.CompilerErrorType.Error -> outOfDate
 
     let private compileEffect (env : EditorEnvironment) (m : EffectNode) (code : list<string>) (commit : bool) =
-        let effect = m.read() |> GLSL.run410
+        let effect = m.read() 
         match effect with
             | Success (effect) ->
                 let debugInfos =
@@ -114,7 +114,7 @@ module EffectEditor =
                             compile {
                                 let! shaders = shaders
                                 Report.BeginTimed "composing shader"
-                                let! composed = shaders |> List.map(fun s -> compile { return s }) |> compose
+                                let! composed = shaders |> List.map(fun s -> Success s) |> compose |> readFrom
 
                                 return composed
                             }
@@ -127,7 +127,7 @@ module EffectEditor =
                                     Report.BeginTimed "updating shader"
 
                                     let e = { e with originals = newShaders }
-                                    m.write (compile { return e })
+                                    m.write (Success e)
 
                                     Report.End() |> ignore //updating
                                 
@@ -259,7 +259,7 @@ module EffectEditor =
             if env.list.SelectedItems.Count > 0 then
                 let item = env.list.SelectedItems.[0]
                 let s = item.Tag |> unbox<EffectNode>
-                let effect = s.read() |> GLSL.run410
+                let effect = s.read()
 
                 match effect with
                     | Success e ->
@@ -436,7 +436,7 @@ module EffectEditor =
                         t.UndoRedo.EmptyUndoBuffer()
                     | _ ->
                         let tag = e.Item.Tag |> unbox<EffectNode>
-                        let effect = tag.read() |> GLSL.run410
+                        let effect = tag.read() 
                         match effect with
                             | Success effect ->
                                 let codes =

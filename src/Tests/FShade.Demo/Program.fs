@@ -50,15 +50,16 @@ type MyEnum =
     | B = 2
 
 
+[<ReflectedDefinition>]
+module Gah = 
+    let bla (v : Vertex) = v.pos
 
 let effectTest() =
-
-    
 
     let vert (v : Vertex) =
         vertex {
             return {
-                pos = Bla.hugo (uniform.Trafo * v.pos) 
+                pos = Bla.hugo (uniform.Trafo * Gah.bla v) 
                 tc = v.tc
                 vi = 0
             }
@@ -466,14 +467,14 @@ let scan (add : Expr<'a -> 'a -> 'a>) (zero : Expr<'a>) (input : 'a[]) (output :
 [<EntryPoint>]
 let main args =
     TessDeconstruct.run()
-    System.Environment.Exit 0
+    //System.Environment.Exit 0
 
     let maxGroupSize = V3i(128, 1024, 1024)
     let test = ComputeShader.ofFunction maxGroupSize (scan <@ fun a b -> a + b @> <@ 0.0 @>)
     let m = ComputeShader.toModule test
     let glsl = ModuleCompiler.compileGLSL410 m
     printfn "%s" glsl.code
-    System.Environment.Exit 0
+    //System.Environment.Exit 0
 
 
     effectTest()
